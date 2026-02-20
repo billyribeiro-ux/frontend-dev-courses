@@ -528,6 +528,116 @@ export const courseModules: Module[] = [
 			{ slug: '02-advanced-features', number: 2, title: 'Advanced Features', description: 'Shallow routing, streaming, service workers, and $props.id().', hasEditor: false },
 			{ slug: '03-env-config', number: 3, title: 'Environment & Config', description: '$env modules, SvelteKit config, and custom error pages.', hasEditor: false }
 		]
+	},
+
+	// Phase 7: Advanced Capstone — TeamBoard
+	{
+		slug: '44-project-foundation',
+		number: 44,
+		title: 'Architecture, Schema & Foundation',
+		description: 'Project requirements, database schema, authentication hooks, and layout system.',
+		phase: 7,
+		lessons: [
+			{ slug: '01-requirements-schema', number: 1, title: 'Requirements, Schema & Environment', description: 'Project planning, database design, and $env configuration.', hasEditor: false },
+			{ slug: '02-auth-hooks', number: 2, title: 'Authentication Hooks', description: 'handle, handleFetch, handleError, reroute, transport, and sequence.', hasEditor: false },
+			{ slug: '03-layouts-errors', number: 3, title: 'Layouts, Auth & Error Handling', description: 'Layout groups, View Transitions, and custom error pages.', hasEditor: false }
+		]
+	},
+	{
+		slug: '45-data-layer',
+		number: 45,
+		title: 'Core Data Layer with Remote Functions',
+		description: 'Query, form, command, and prerender remote functions for the data layer.',
+		phase: 7,
+		lessons: [
+			{ slug: '01-query-functions', number: 1, title: 'Query Functions', description: 'Type-safe data fetching with query() and Valibot validation.', hasEditor: false },
+			{ slug: '02-form-command', number: 2, title: 'Form & Command Functions', description: 'Mutations with form(), command(), field helpers, and .updates().', hasEditor: false },
+			{ slug: '03-prerender-routing', number: 3, title: 'Prerender & Advanced Routing', description: 'prerender(), route matchers, rest params, and optional params.', hasEditor: false }
+		]
+	},
+	{
+		slug: '46-board-state',
+		number: 46,
+		title: 'Board State, Context & Reactivity',
+		description: 'Advanced runes, context API, effects, and debugging for board state.',
+		phase: 7,
+		lessons: [
+			{ slug: '01-state-architecture', number: 1, title: 'State Architecture', description: '$state, $state.raw, $state.snapshot, and $derived.by for board data.', hasEditor: false },
+			{ slug: '02-context-api', number: 2, title: 'Context API for Components', description: 'setContext, getContext, hasContext, getAllContexts, and reactive context.', hasEditor: false },
+			{ slug: '03-effects-debugging', number: 3, title: 'Effects, Timing & Debugging', description: '$effect.pre, untrack, tick, flushSync, $inspect, and $inspect.trace.', hasEditor: false }
+		]
+	},
+	{
+		slug: '47-board-interactions',
+		number: 47,
+		title: 'Kanban Board Interactions',
+		description: 'Drag-and-drop actions, animations, transitions, and template patterns.',
+		phase: 7,
+		lessons: [
+			{ slug: '01-drag-drop-actions', number: 1, title: 'Drag-and-Drop with Actions', description: 'Custom draggable, dropzone, tooltip, and longpress actions.', hasEditor: false },
+			{ slug: '02-animations', number: 2, title: 'Animations & Transitions', description: 'animate:flip, crossfade, tweened, spring, and reduced motion.', hasEditor: false },
+			{ slug: '03-attachments-templates', number: 3, title: 'Attachments & Templates', description: '{@attach}, {#key}, {@const}, svelte:element, and $props.id().', hasEditor: false }
+		]
+	},
+	{
+		slug: '48-navigation-modals',
+		number: 48,
+		title: 'Navigation, Modals & Command Palette',
+		description: 'Shallow routing modals, command palette, and SvelteKit app modules.',
+		phase: 7,
+		lessons: [
+			{ slug: '01-shallow-routing-modal', number: 1, title: 'Task Modal with Shallow Routing', description: 'pushState, replaceState, beforeNavigate, and snapshot.', hasEditor: false },
+			{ slug: '02-command-palette', number: 2, title: 'Command Palette & Shortcuts', description: 'svelte:window, svelte:document, svelte:body, and keyboard events.', hasEditor: false },
+			{ slug: '03-navigation-app-modules', number: 3, title: 'Navigation & App Modules', description: 'goto, invalidate, $app/environment, $app/paths, and link options.', hasEditor: false }
+		]
+	},
+	{
+		slug: '49-realtime',
+		number: 49,
+		title: 'Real-Time Collaboration & Notifications',
+		description: 'Server-Sent Events, notification toasts, and streaming dashboard.',
+		phase: 7,
+		lessons: [
+			{ slug: '01-sse-live-updates', number: 1, title: 'SSE for Live Updates', description: 'Server-Sent Events, optimistic UI, and error boundaries.', hasEditor: false },
+			{ slug: '02-notifications', number: 2, title: 'Notification System', description: 'Toast transitions, spring animations, and notification dropdown.', hasEditor: false },
+			{ slug: '03-streaming-dashboard', number: 3, title: 'Streaming Dashboard', description: 'Streaming load functions, {#await} skeletons, and animated numbers.', hasEditor: false }
+		]
+	},
+	{
+		slug: '50-team-management',
+		number: 50,
+		title: 'Team Management & Permissions',
+		description: 'Rich forms, role-based access, and activity feed.',
+		phase: 7,
+		lessons: [
+			{ slug: '01-team-settings', number: 1, title: 'Team Settings Forms', description: 'Remote form(), command(), sensitive fields, and dirty checking.', hasEditor: false },
+			{ slug: '02-role-based-access', number: 2, title: 'Role-Based Access', description: 'Permission hooks, context-based access control, and 403 pages.', hasEditor: false },
+			{ slug: '03-activity-feed', number: 3, title: 'Activity Feed & Audit Log', description: 'Paginated queries, intersection observer, and dynamic elements.', hasEditor: false }
+		]
+	},
+	{
+		slug: '51-pwa-polish',
+		number: 51,
+		title: 'Offline Support, Dark Mode & Resilience',
+		description: 'Service workers, theme system, error boundaries, and instrumentation.',
+		phase: 7,
+		lessons: [
+			{ slug: '01-service-worker', number: 1, title: 'Service Worker & Offline', description: '$service-worker module, cache strategies, and offline queue.', hasEditor: false },
+			{ slug: '02-dark-mode-theme', number: 2, title: 'Dark Mode & Themes', description: 'Media queries, theme context, $effect.pre, and svelte:head.', hasEditor: false },
+			{ slug: '03-error-boundaries', number: 3, title: 'Error Boundaries & Instrumentation', description: 'svelte:boundary, {#snippet failed}, svelte:options, and OpenTelemetry.', hasEditor: false }
+		]
+	},
+	{
+		slug: '52-deploy',
+		number: 52,
+		title: 'Testing, Performance & Deployment',
+		description: 'Accessibility polish, testing suite, and production deployment.',
+		phase: 7,
+		lessons: [
+			{ slug: '01-a11y-performance', number: 1, title: 'Accessibility & Performance', description: 'Keyboard nav, $props.id(), focus management, and performance audit.', hasEditor: false },
+			{ slug: '02-testing', number: 2, title: 'Testing the Application', description: 'Unit, component, and E2E tests for runes, actions, and context.', hasEditor: false },
+			{ slug: '03-production-deploy', number: 3, title: 'Production Deployment', description: '$env audit, adapter config, version detection, and monitoring.', hasEditor: false }
+		]
 	}
 ];
 

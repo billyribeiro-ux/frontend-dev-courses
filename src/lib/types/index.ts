@@ -22,6 +22,16 @@ export interface UserProgress {
 	completedAt: string | null;
 }
 
+export interface Note {
+	id: number;
+	userId: string;
+	moduleSlug: string;
+	lessonSlug: string;
+	content: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
 export interface Exercise {
 	id: string;
 	title: string;

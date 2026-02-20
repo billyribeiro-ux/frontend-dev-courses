@@ -1,0 +1,26 @@
+[
+	{
+		"id": "01-headings",
+		"title": "Add Headings",
+		"instructions": "Create a page with an h1 for the title, an h2 for a subtitle, and a paragraph below each.",
+		"starterCode": "<h1>My Page</h1>",
+		"solution": "<h1>My Page</h1>\n<p>Welcome to my page.</p>\n\n<h2>About Me</h2>\n<p>I am learning Svelte!</p>",
+		"language": "html"
+	},
+	{
+		"id": "02-links-images",
+		"title": "Add a Link and Image",
+		"instructions": "Add a link to https://svelte.dev and an image with proper alt text.",
+		"starterCode": "<h1>My Svelte Page</h1>\n<!-- Add a link and image below -->",
+		"solution": "<h1>My Svelte Page</h1>\n<a href=\"https://svelte.dev\">Visit Svelte</a>\n<img src=\"https://svelte.dev/favicon.png\" alt=\"Svelte logo\" />",
+		"language": "html"
+	},
+	{
+		"id": "03-semantic-html",
+		"title": "Build a Semantic Page",
+		"instructions": "Create a page with header, main, and footer elements. Add a nav inside the header with two links.",
+		"starterCode": "<!-- Build a semantic page structure -->",
+		"solution": "<header>\n  <nav>\n    <a href=\"/\">Home</a>\n    <a href=\"/about\">About</a>\n  </nav>\n</header>\n\n<main>\n  <h1>Welcome</h1>\n  <p>This is my semantic page.</p>\n</main>\n\n<footer>\n  <p>&copy; 2026 My Site</p>\n</footer>",
+		"language": "html"
+	}
+]

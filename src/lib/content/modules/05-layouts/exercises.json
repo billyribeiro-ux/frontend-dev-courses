@@ -1,0 +1,18 @@
+[
+	{
+		"id": "01-flexbox-nav",
+		"title": "Build a Navbar",
+		"instructions": "Use Flexbox to create a horizontal navbar with a logo on the left and links on the right.",
+		"starterCode": "<nav>\n  <span class=\"logo\">MySite</span>\n  <div class=\"links\">\n    <a href=\"/\">Home</a>\n    <a href=\"/about\">About</a>\n    <a href=\"/contact\">Contact</a>\n  </div>\n</nav>\n\n<style>\n  nav {\n    /* Make this a flexbox container */\n  }\n</style>",
+		"solution": "<nav>\n  <span class=\"logo\">MySite</span>\n  <div class=\"links\">\n    <a href=\"/\">Home</a>\n    <a href=\"/about\">About</a>\n    <a href=\"/contact\">Contact</a>\n  </div>\n</nav>\n\n<style>\n  nav {\n    display: flex;\n    justify-content: space-between;\n    align-items: center;\n    padding: 16px 24px;\n    background: #1a1a2e;\n    color: white;\n  }\n  .logo { font-weight: bold; font-size: 1.25rem; }\n  .links { display: flex; gap: 16px; }\n  a { color: white; text-decoration: none; }\n</style>",
+		"language": "svelte"
+	},
+	{
+		"id": "02-grid-cards",
+		"title": "Card Grid",
+		"instructions": "Use CSS Grid to create a responsive 3-column grid of cards.",
+		"starterCode": "<div class=\"grid\">\n  <div class=\"card\">Card 1</div>\n  <div class=\"card\">Card 2</div>\n  <div class=\"card\">Card 3</div>\n  <div class=\"card\">Card 4</div>\n  <div class=\"card\">Card 5</div>\n  <div class=\"card\">Card 6</div>\n</div>\n\n<style>\n  .grid {\n    /* Make this a grid */\n  }\n  .card {\n    padding: 24px;\n    background: #f0f0f0;\n    border-radius: 8px;\n    text-align: center;\n  }\n</style>",
+		"solution": "<div class=\"grid\">\n  <div class=\"card\">Card 1</div>\n  <div class=\"card\">Card 2</div>\n  <div class=\"card\">Card 3</div>\n  <div class=\"card\">Card 4</div>\n  <div class=\"card\">Card 5</div>\n  <div class=\"card\">Card 6</div>\n</div>\n\n<style>\n  .grid {\n    display: grid;\n    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\n    gap: 16px;\n  }\n  .card {\n    padding: 24px;\n    background: #f0f0f0;\n    border-radius: 8px;\n    text-align: center;\n  }\n</style>",
+		"language": "svelte"
+	}
+]

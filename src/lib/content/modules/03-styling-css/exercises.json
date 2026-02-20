@@ -1,0 +1,18 @@
+[
+	{
+		"id": "01-basic-styles",
+		"title": "Style a Card",
+		"instructions": "Style the card with a background color, padding, rounded corners, and a shadow.",
+		"starterCode": "<div class=\"card\">\n  <h2>Hello!</h2>\n  <p>This is a card.</p>\n</div>\n\n<style>\n  .card {\n    /* Add your styles here */\n  }\n</style>",
+		"solution": "<div class=\"card\">\n  <h2>Hello!</h2>\n  <p>This is a card.</p>\n</div>\n\n<style>\n  .card {\n    background: #f8f9fa;\n    padding: 24px;\n    border-radius: 12px;\n    box-shadow: 0 2px 8px rgba(0,0,0,0.1);\n  }\n  h2 { color: #ff3e00; margin: 0 0 8px; }\n  p { color: #666; margin: 0; }\n</style>",
+		"language": "svelte"
+	},
+	{
+		"id": "02-box-model",
+		"title": "Fix the Spacing",
+		"instructions": "Add proper margin and padding to make the boxes look evenly spaced.",
+		"starterCode": "<div class=\"box\">Box 1</div>\n<div class=\"box\">Box 2</div>\n<div class=\"box\">Box 3</div>\n\n<style>\n  .box {\n    background: #ff3e00;\n    color: white;\n  }\n</style>",
+		"solution": "<div class=\"box\">Box 1</div>\n<div class=\"box\">Box 2</div>\n<div class=\"box\">Box 3</div>\n\n<style>\n  .box {\n    background: #ff3e00;\n    color: white;\n    padding: 16px;\n    margin-bottom: 12px;\n    border-radius: 8px;\n  }\n</style>",
+		"language": "svelte"
+	}
+]

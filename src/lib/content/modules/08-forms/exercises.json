@@ -1,0 +1,18 @@
+[
+	{
+		"id": "01-input-binding",
+		"title": "Name Input",
+		"instructions": "Create an input field that binds to a name variable and displays a greeting in real time.",
+		"starterCode": "<script>\n  let name = $state('');\n</script>\n\n<!-- Add an input with bind:value -->\n<!-- Display: Hello, {name}! (or 'Hello, stranger!' if empty) -->",
+		"solution": "<script>\n  let name = $state('');\n</script>\n\n<input bind:value={name} placeholder=\"Enter your name\" />\n\n{#if name}\n  <p>Hello, {name}!</p>\n{:else}\n  <p>Hello, stranger!</p>\n{/if}",
+		"language": "svelte"
+	},
+	{
+		"id": "02-contact-form",
+		"title": "Contact Form",
+		"instructions": "Build a contact form with name, email, and message fields. Show a live preview of the message.",
+		"starterCode": "<script>\n  let name = $state('');\n  let email = $state('');\n  let message = $state('');\n</script>\n\n<form>\n  <!-- Add labeled inputs for name, email, and a textarea for message -->\n</form>\n\n<div class=\"preview\">\n  <h3>Preview</h3>\n  <!-- Show the form data here -->\n</div>",
+		"solution": "<script>\n  let name = $state('');\n  let email = $state('');\n  let message = $state('');\n</script>\n\n<form>\n  <label>Name <input bind:value={name} /></label>\n  <label>Email <input type=\"email\" bind:value={email} /></label>\n  <label>Message <textarea bind:value={message}></textarea></label>\n</form>\n\n<div class=\"preview\">\n  <h3>Preview</h3>\n  <p><strong>From:</strong> {name} ({email})</p>\n  <p><strong>Message:</strong> {message}</p>\n</div>\n\n<style>\n  form { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }\n  label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; }\n  input, textarea { padding: 8px; border: 1px solid #e2e8f0; border-radius: 6px; }\n  .preview { padding: 16px; background: #f8f9fa; border-radius: 8px; }\n</style>",
+		"language": "svelte"
+	}
+]

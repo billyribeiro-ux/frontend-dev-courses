@@ -1,0 +1,18 @@
+[
+	{
+		"id": "01-card-component",
+		"title": "Create a Card Component",
+		"instructions": "Build a reusable Card component that accepts title and description props using $props().",
+		"starterCode": "<script>\n  // Use $props() to accept title and description\n</script>\n\n<div class=\"card\">\n  <!-- Display title in h3 and description in p -->\n</div>\n\n<style>\n  .card {\n    padding: 20px;\n    border: 1px solid #e2e8f0;\n    border-radius: 12px;\n  }\n</style>",
+		"solution": "<script>\n  let { title, description } = $props();\n</script>\n\n<div class=\"card\">\n  <h3>{title}</h3>\n  <p>{description}</p>\n</div>\n\n<style>\n  .card {\n    padding: 20px;\n    border: 1px solid #e2e8f0;\n    border-radius: 12px;\n  }\n  h3 { margin: 0 0 8px; color: #ff3e00; }\n  p { margin: 0; color: #666; }\n</style>",
+		"language": "svelte"
+	},
+	{
+		"id": "02-icon-button",
+		"title": "Icon Button",
+		"instructions": "Create a button component that accepts a label prop and displays it alongside an icon.",
+		"starterCode": "<script>\n  // Accept a label prop\n</script>\n\n<button>\n  <!-- Display the label -->\n</button>",
+		"solution": "<script>\n  let { label = 'Click me' } = $props();\n</script>\n\n<button>\n  ★ {label}\n</button>\n\n<style>\n  button {\n    display: inline-flex;\n    align-items: center;\n    gap: 8px;\n    padding: 8px 16px;\n    background: #ff3e00;\n    color: white;\n    border: none;\n    border-radius: 8px;\n    cursor: pointer;\n    font-size: 14px;\n  }\n</style>",
+		"language": "svelte"
+	}
+]

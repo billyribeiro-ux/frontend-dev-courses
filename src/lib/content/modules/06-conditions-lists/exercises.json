@@ -1,0 +1,18 @@
+[
+	{
+		"id": "01-toggle",
+		"title": "Toggle Visibility",
+		"instructions": "Create a button that toggles showing/hiding a message using {#if}.",
+		"starterCode": "<script>\n  let visible = $state(true);\n</script>\n\n<button onclick={() => visible = !visible}>\n  {visible ? 'Hide' : 'Show'}\n</button>\n\n<!-- Add an {#if} block to show/hide the message -->",
+		"solution": "<script>\n  let visible = $state(true);\n</script>\n\n<button onclick={() => visible = !visible}>\n  {visible ? 'Hide' : 'Show'}\n</button>\n\n{#if visible}\n  <p>Now you see me!</p>\n{:else}\n  <p>Now you don't!</p>\n{/if}",
+		"language": "svelte"
+	},
+	{
+		"id": "02-fruit-list",
+		"title": "Render a List",
+		"instructions": "Use {#each} to render a list of fruits from the array.",
+		"starterCode": "<script>\n  let fruits = $state(['Apple', 'Banana', 'Cherry', 'Date']);\n</script>\n\n<h2>Fruits</h2>\n<!-- Use {#each} to render the list -->",
+		"solution": "<script>\n  let fruits = $state(['Apple', 'Banana', 'Cherry', 'Date']);\n</script>\n\n<h2>Fruits</h2>\n<ul>\n  {#each fruits as fruit}\n    <li>{fruit}</li>\n  {/each}\n</ul>",
+		"language": "svelte"
+	}
+]

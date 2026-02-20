@@ -4,6 +4,7 @@ import { getModule } from '$lib/content/index.js';
 import { db } from '$lib/server/db.js';
 import { progress } from '$lib/server/schema.js';
 import { and, eq } from 'drizzle-orm';
+import { loadLessonContent, loadExercises } from '$lib/server/markdown.js';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
 	const mod = getModule(params.module);
@@ -30,9 +31,17 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const currentIndex = mod.lessons.findIndex((l) => l.slug === params.lesson);
 	const nextLesson = mod.lessons[currentIndex + 1] ?? null;
 
+	// Load markdown content
+	const content = loadLessonContent(params.module, params.lesson);
+
+	// Load exercises for editor-enabled lessons
+	const exercises = lesson.hasEditor ? loadExercises(params.module) : [];
+
 	return {
 		module: mod,
 		lesson,
+		content,
+		exercises,
 		isCompleted: userProgress?.completed ?? false,
 		nextLesson
 	};

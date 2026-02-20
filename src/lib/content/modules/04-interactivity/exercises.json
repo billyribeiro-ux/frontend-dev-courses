@@ -1,0 +1,18 @@
+[
+	{
+		"id": "01-counter",
+		"title": "Build a Counter",
+		"instructions": "Create a counter that starts at 0. Add buttons to increment and decrement the count.",
+		"starterCode": "<script>\n  let count = $state(0);\n</script>\n\n<p>Count: {count}</p>\n<!-- Add increment and decrement buttons -->",
+		"solution": "<script>\n  let count = $state(0);\n</script>\n\n<p>Count: {count}</p>\n<button onclick={() => count++}>+1</button>\n<button onclick={() => count--}>-1</button>",
+		"language": "svelte"
+	},
+	{
+		"id": "02-greeting",
+		"title": "Dynamic Greeting",
+		"instructions": "Display a greeting that changes based on the name variable.",
+		"starterCode": "<script>\n  let name = $state('World');\n</script>\n\n<!-- Display: Hello, {name}! -->",
+		"solution": "<script>\n  let name = $state('World');\n</script>\n\n<h1>Hello, {name}!</h1>\n<input bind:value={name} placeholder=\"Enter your name\" />",
+		"language": "svelte"
+	}
+]

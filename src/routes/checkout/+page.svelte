@@ -1,8 +1,60 @@
 <script lang="ts">
 	import MetaTags from '$lib/components/seo/MetaTags.svelte';
-	import { Lock } from 'phosphor-svelte';
+	import { Lock, CircleNotch, WarningCircle } from 'phosphor-svelte';
+	import { onMount } from 'svelte';
+	import { PUBLIC_STRIPE_KEY } from '$env/static/public';
 
 	let { data } = $props();
+
+	let stripe: any = $state(null);
+	let elements: any = $state(null);
+	let loading = $state(true);
+	let processing = $state(false);
+	let errorMessage = $state('');
+
+	onMount(async () => {
+		try {
+			const { loadStripe } = await import('@stripe/stripe-js');
+			stripe = await loadStripe(PUBLIC_STRIPE_KEY);
+
+			if (stripe && data.clientSecret) {
+				elements = stripe.elements({
+					clientSecret: data.clientSecret,
+					appearance: {
+						theme: 'stripe',
+						variables: { colorPrimary: '#ff3e00', borderRadius: '8px' }
+					}
+				});
+
+				const paymentElement = elements.create('payment');
+				paymentElement.mount('#payment-element');
+				paymentElement.on('ready', () => { loading = false; });
+			} else {
+				loading = false;
+			}
+		} catch {
+			loading = false;
+			errorMessage = 'Failed to load payment form. Please refresh.';
+		}
+	});
+
+	async function handleSubmit() {
+		if (!stripe || !elements) return;
+		processing = true;
+		errorMessage = '';
+
+		const { error } = await stripe.confirmPayment({
+			elements,
+			confirmParams: {
+				return_url: `${window.location.origin}/checkout/success`
+			}
+		});
+
+		if (error) {
+			errorMessage = error.message ?? 'An error occurred during payment.';
+			processing = false;
+		}
+	}
 </script>
 
 <MetaTags
@@ -24,13 +76,38 @@
 			</div>
 		</div>
 
+		{#if errorMessage}
+			<div class="error-message">
+				<WarningCircle size={16} />
+				{errorMessage}
+			</div>
+		{/if}
+
 		<div class="payment-form">
+			<div id="payment-element">
+				{#if loading}
+					<div class="loading-state">
+						<CircleNotch size={20} class="spin" />
+						<span>Loading payment form...</span>
+					</div>
+				{/if}
+			</div>
+			<button
+				class="btn-primary"
+				type="button"
+				onclick={handleSubmit}
+				disabled={loading || processing || !stripe}
+			>
+				{#if processing}
+					<CircleNotch size={16} class="spin" />
+					Processing...
+				{:else}
+					Pay $99
+				{/if}
+			</button>
 			<p class="payment-note">
 				Payment is processed securely via Stripe. Your card details never touch our servers.
 			</p>
-			<!-- Stripe PaymentElement will be mounted here once Stripe.js is loaded -->
-			<div id="payment-element"></div>
-			<button class="btn-primary" type="button">Pay $99</button>
 		</div>
 	</div>
 </div>
@@ -83,27 +160,41 @@
 		font-weight: 700;
 	}
 
-	.payment-note {
-		font-size: var(--text-xs);
-		color: var(--color-text-muted);
-		margin: 0 0 var(--space-md);
+	.error-message {
+		display: flex;
+		align-items: center;
+		gap: var(--space-sm);
+		padding: var(--space-sm) var(--space-md);
+		background: #fef2f2;
+		color: var(--color-error);
+		border-radius: var(--radius-md);
+		font-size: var(--text-sm);
+		margin-bottom: var(--space-md);
 	}
 
 	#payment-element {
 		margin-bottom: var(--space-md);
 		min-height: 40px;
-		border: 1px dashed var(--color-border);
-		border-radius: var(--radius-md);
-		padding: var(--space-md);
+	}
+
+	.loading-state {
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		gap: var(--space-sm);
+		padding: var(--space-lg);
 		color: var(--color-text-muted);
 		font-size: var(--text-sm);
+		border: 1px dashed var(--color-border);
+		border-radius: var(--radius-md);
 	}
 
 	.btn-primary {
 		width: 100%;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: var(--space-sm);
 		padding: var(--space-sm) var(--space-md);
 		background: var(--color-brand);
 		color: white;
@@ -113,9 +204,31 @@
 		font-weight: 600;
 		cursor: pointer;
 		transition: background var(--transition-fast);
+		font-family: inherit;
 	}
 
-	.btn-primary:hover {
+	.btn-primary:hover:not(:disabled) {
 		background: var(--color-brand-dark);
+	}
+
+	.btn-primary:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+
+	.payment-note {
+		font-size: var(--text-xs);
+		color: var(--color-text-muted);
+		margin: var(--space-md) 0 0;
+		text-align: center;
+	}
+
+	:global(.spin) {
+		animation: spin 1s linear infinite;
+	}
+
+	@keyframes spin {
+		from { transform: rotate(0deg); }
+		to { transform: rotate(360deg); }
 	}
 </style>

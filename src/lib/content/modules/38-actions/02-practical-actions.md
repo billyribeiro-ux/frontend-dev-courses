@@ -1,6 +1,6 @@
 # Practical Actions
 
-Now that you understand the anatomy of an action — mount, update, destroy — it is time to build real ones. Actions shine when you need reusable DOM behavior that does not belong in a component's template logic. In this lesson you will build six practical actions you can drop into any project. Put these in a `$lib/actions/` folder and import them wherever you need them.
+Now that you understand the anatomy of an action — mount, update, destroy — it is time to build real ones. Actions shine when you need reusable DOM behavior that does not belong in a component's template logic. In this lesson you will build six practical actions you can drop into any project.
 
 ## Click Outside
 
@@ -12,11 +12,9 @@ import type { Action } from 'svelte/action';
 
 export const clickOutside: Action<HTMLElement, () => void> = (node, callback) => {
   let handler = callback;
-
   function handleClick(e: MouseEvent) {
     if (!node.contains(e.target as Node)) handler();
   }
-
   document.addEventListener('click', handleClick, true);
 
   return {
@@ -41,6 +39,8 @@ export const clickOutside: Action<HTMLElement, () => void> = (node, callback) =>
 {/if}
 ```
 
+The `true` in `addEventListener` uses the capture phase, so the handler fires before the button's own click can immediately close the dropdown.
+
 ## Tooltip
 
 This action creates a floating tooltip on hover, positioned above the element:
@@ -59,14 +59,13 @@ export const tooltip: Action<HTMLElement, string> = (node, text) => {
     Object.assign(el.style, {
       position: 'absolute', background: '#333', color: '#fff',
       padding: '6px 10px', borderRadius: '4px', fontSize: '13px',
-      pointerEvents: 'none', zIndex: '1000', whiteSpace: 'nowrap'
+      pointerEvents: 'none', zIndex: '1000'
     });
     document.body.appendChild(el);
     const rect = node.getBoundingClientRect();
     el.style.left = `${rect.left + rect.width / 2 - el.offsetWidth / 2}px`;
     el.style.top = `${rect.top - el.offsetHeight - 8 + window.scrollY}px`;
   }
-
   function hide() { el?.remove(); el = null; }
 
   node.addEventListener('mouseenter', show);
@@ -95,10 +94,7 @@ import type { Action } from 'svelte/action';
 export const inview: Action<HTMLElement, { onEnter?: () => void; onLeave?: () => void; threshold?: number }> = (node, params) => {
   let current = params;
   const observer = new IntersectionObserver(
-    ([entry]) => {
-      if (entry.isIntersecting) current.onEnter?.();
-      else current.onLeave?.();
-    },
+    ([entry]) => entry.isIntersecting ? current.onEnter?.() : current.onLeave?.(),
     { threshold: current.threshold ?? 0.5 }
   );
   observer.observe(node);
@@ -116,10 +112,7 @@ export const inview: Action<HTMLElement, { onEnter?: () => void; onLeave?: () =>
   let visible = $state(false);
 </script>
 
-<div
-  use:inview={{ onEnter: () => visible = true, onLeave: () => visible = false }}
-  class:visible
->
+<div use:inview={{ onEnter: () => visible = true, onLeave: () => visible = false }} class:visible>
   I fade in when scrolled into view!
 </div>
 ```
@@ -134,13 +127,11 @@ import type { Action } from 'svelte/action';
 
 export const clipboard: Action<HTMLElement, string | undefined> = (node, text) => {
   let currentText = text;
-
   async function handleClick() {
     await navigator.clipboard.writeText(currentText ?? node.textContent ?? '');
     node.dataset.copied = 'true';
     setTimeout(() => delete node.dataset.copied, 2000);
   }
-
   node.addEventListener('click', handleClick);
   node.style.cursor = 'pointer';
 
@@ -188,7 +179,6 @@ import type { Action } from 'svelte/action';
 export const longpress: Action<HTMLElement, { duration?: number; onLongPress: () => void }> = (node, params) => {
   let current = params;
   let timer: ReturnType<typeof setTimeout>;
-
   function start() { timer = setTimeout(() => current.onLongPress(), current.duration ?? 500); }
   function cancel() { clearTimeout(timer); }
 
@@ -217,7 +207,7 @@ export const longpress: Action<HTMLElement, { duration?: number; onLongPress: ()
 
 ## Try It
 
-Build a `draggable` action that lets a user drag an element around the screen. The action should listen for `pointerdown`, `pointermove`, and `pointerup` events, update the element's position using `transform: translate(x, y)`, and clean up all listeners on destroy.
+Build a `draggable` action that lets a user drag an element around the screen. Listen for `pointerdown`, `pointermove`, and `pointerup` events, update the element's position with `transform: translate(x, y)`, and clean up all listeners on destroy.
 
 ## Key Takeaways
 

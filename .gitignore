@@ -21,6 +21,8 @@ Thumbs.db
 # Database
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 
 # Vite
 vite.config.js.timestamp-*

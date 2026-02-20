@@ -2,7 +2,7 @@
 	import MetaTags from '$lib/components/seo/MetaTags.svelte';
 	import { Lock, CircleNotch, WarningCircle } from 'phosphor-svelte';
 	import { onMount } from 'svelte';
-	import { PUBLIC_STRIPE_KEY } from '$env/static/public';
+	import { env } from '$env/dynamic/public';
 
 	let { data } = $props();
 
@@ -15,7 +15,7 @@
 	onMount(async () => {
 		try {
 			const { loadStripe } = await import('@stripe/stripe-js');
-			stripe = await loadStripe(PUBLIC_STRIPE_KEY);
+			stripe = await loadStripe(env.PUBLIC_STRIPE_KEY ?? '');
 
 			if (stripe && data.clientSecret) {
 				elements = stripe.elements({

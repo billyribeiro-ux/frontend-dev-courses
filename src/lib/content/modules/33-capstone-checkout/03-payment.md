@@ -26,8 +26,9 @@ export async function load({ cookies, locals, url }) {
 
   const checkout = JSON.parse(checkoutRaw);
 
-  // Cart items come from the request (sent from client)
-  // In production you would validate these against the database
+  // IMPORTANT: Cart items come from the request, but you must ALWAYS
+  // validate prices against the database before creating a Stripe session.
+  // Never trust client-side amounts — a user could modify the hidden form field.
   return { checkout };
 }
 
@@ -197,9 +198,12 @@ export async function load({ url }) {
 
   let { data } = $props();
 
-  // Clear the cart after successful purchase
+  // Only clear the cart after verifying payment succeeded on the server.
+  // The load function already confirmed the session status, so this is safe.
   onMount(() => {
-    cart.clear();
+    if (data.customerName) {
+      cart.clear();
+    }
   });
 </script>
 

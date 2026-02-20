@@ -46,7 +46,8 @@ export const courseModules: Module[] = [
 		lessons: [
 			{ slug: '01-variables-state', number: 1, title: 'Variables & $state()', description: 'Declaring reactive state in Svelte 5.', hasEditor: true },
 			{ slug: '02-text-interpolation', number: 2, title: 'Dynamic Text', description: 'Using {expressions} in your markup.', hasEditor: true },
-			{ slug: '03-events', number: 3, title: 'Handling Events', description: 'Button clicks and user interactions.', hasEditor: true }
+			{ slug: '03-events', number: 3, title: 'Handling Events', description: 'Button clicks and user interactions.', hasEditor: true },
+			{ slug: '04-objects', number: 4, title: 'Objects & Methods', description: 'Object literals, properties, destructuring, and arrays of objects.', hasEditor: true }
 		]
 	},
 	{
@@ -428,6 +429,104 @@ export const courseModules: Module[] = [
 			{ slug: '01-pre-deploy', number: 1, title: 'Pre-Deploy Checklist', description: 'Security review and final checks.', hasEditor: false },
 			{ slug: '02-vercel-deploy', number: 2, title: 'Deploying to Vercel', description: 'Production deployment and custom domain.', hasEditor: false },
 			{ slug: '03-post-launch', number: 3, title: 'Post-Launch', description: 'Monitoring, analytics, and next steps.', hasEditor: false }
+		]
+	},
+
+	// Phase 6: Svelte 5 & SvelteKit Mastery
+	{
+		slug: '36-advanced-runes',
+		number: 36,
+		title: 'Advanced Runes',
+		description: 'Deep reactivity, $state.raw, $state.snapshot, $derived.by, and $effect variants.',
+		phase: 6,
+		lessons: [
+			{ slug: '01-state-deep-dive', number: 1, title: 'State Deep Dive', description: 'Deep reactivity, $state.raw(), and $state.snapshot().', hasEditor: false },
+			{ slug: '02-derived-advanced', number: 2, title: 'Advanced Derived State', description: '$derived.by() and complex computations.', hasEditor: false },
+			{ slug: '03-effects-mastery', number: 3, title: 'Effects Mastery', description: '$effect.pre, $effect.tracking, untrack, tick, and flushSync.', hasEditor: false }
+		]
+	},
+	{
+		slug: '37-transitions',
+		number: 37,
+		title: 'Built-in Transitions & Motion',
+		description: 'Svelte transitions, animations, tweened, and spring.',
+		phase: 6,
+		lessons: [
+			{ slug: '01-transition-basics', number: 1, title: 'Transition Basics', description: 'fade, fly, slide, blur, scale, and in:/out: directives.', hasEditor: false },
+			{ slug: '02-custom-transitions', number: 2, title: 'Custom Transitions', description: 'Custom CSS/JS transitions, crossfade, and transition events.', hasEditor: false },
+			{ slug: '03-motion-animate', number: 3, title: 'Motion & Animate', description: 'animate:flip, tweened(), spring(), and reduced motion.', hasEditor: false }
+		]
+	},
+	{
+		slug: '38-actions',
+		number: 38,
+		title: 'Actions & Attachments',
+		description: 'The use: directive, custom actions, and the @attach directive.',
+		phase: 6,
+		lessons: [
+			{ slug: '01-actions-basics', number: 1, title: 'Actions Basics', description: 'Creating actions with use:, cleanup, and update.', hasEditor: false },
+			{ slug: '02-practical-actions', number: 2, title: 'Practical Actions', description: 'Click-outside, tooltip, intersection observer, and more.', hasEditor: false },
+			{ slug: '03-attachments', number: 3, title: 'Attachments', description: 'The {@attach} directive and reactive DOM interactions.', hasEditor: false }
+		]
+	},
+	{
+		slug: '39-special-elements',
+		number: 39,
+		title: 'Special Elements & Template Power',
+		description: 'svelte:window, svelte:boundary, {#await}, {#key}, and more.',
+		phase: 6,
+		lessons: [
+			{ slug: '01-window-document', number: 1, title: 'Window & Document', description: 'svelte:window, svelte:document, svelte:body, and svelte:head.', hasEditor: false },
+			{ slug: '02-dynamic-elements', number: 2, title: 'Dynamic Elements', description: 'svelte:element, svelte:boundary, svelte:options, and script module.', hasEditor: false },
+			{ slug: '03-template-tags', number: 3, title: 'Template Tags', description: '{#await}, {#key}, {@const}, {@debug}, and {#each :else}.', hasEditor: false }
+		]
+	},
+	{
+		slug: '40-navigation',
+		number: 40,
+		title: 'SvelteKit Navigation & App Modules',
+		description: 'goto, beforeNavigate, $app/stores, $app/environment, and advanced routing.',
+		phase: 6,
+		lessons: [
+			{ slug: '01-app-navigation', number: 1, title: 'App Navigation', description: 'goto(), beforeNavigate, afterNavigate, and shallow routing.', hasEditor: false },
+			{ slug: '02-app-modules', number: 2, title: 'App Modules', description: '$app/stores, $app/environment, and $app/paths.', hasEditor: false },
+			{ slug: '03-advanced-routing', number: 3, title: 'Advanced Routing', description: 'Page options, error pages, link options, and streaming.', hasEditor: false }
+		]
+	},
+	{
+		slug: '41-remote-functions',
+		number: 41,
+		title: 'Remote Functions',
+		description: 'SvelteKit query, form, command, and prerender remote functions.',
+		phase: 6,
+		lessons: [
+			{ slug: '01-query', number: 1, title: 'Query Functions', description: 'Type-safe data fetching with query() and query.batch().', hasEditor: false },
+			{ slug: '02-form-remote', number: 2, title: 'Form Functions', description: 'Progressive forms with schema validation and field helpers.', hasEditor: false },
+			{ slug: '03-command-prerender', number: 3, title: 'Command & Prerender', description: 'Imperative mutations and build-time data fetching.', hasEditor: false }
+		]
+	},
+	{
+		slug: '42-context-stores',
+		number: 42,
+		title: 'Context, Stores & Debugging',
+		description: 'Context API, legacy stores, $inspect, and debugging techniques.',
+		phase: 6,
+		lessons: [
+			{ slug: '01-context-deep', number: 1, title: 'Context API Deep Dive', description: 'setContext, getContext, typed contexts, and reactive context.', hasEditor: false },
+			{ slug: '02-stores', number: 2, title: 'Svelte Stores', description: 'writable, readable, derived, custom stores, and migration to runes.', hasEditor: false },
+			{ slug: '03-debugging', number: 3, title: 'Debugging Reactivity', description: '$inspect, $inspect.trace, {@debug}, and common pitfalls.', hasEditor: false }
+		]
+	},
+	{
+		slug: '43-advanced-sveltekit',
+		number: 43,
+		title: 'Advanced SvelteKit Patterns',
+		description: 'Hooks deep dive, streaming, environment variables, and configuration.',
+		phase: 6,
+		lessons: [
+			{ slug: '01-hooks-deep', number: 1, title: 'Hooks Deep Dive', description: 'handle, handleFetch, handleError, reroute, and transport.', hasEditor: false },
+			{ slug: '02-advanced-features', number: 2, title: 'Advanced Features', description: 'Shallow routing, streaming, service workers, and $props.id().', hasEditor: false },
+			{ slug: '03-env-config', number: 3, title: 'Environment & Config', description: '$env modules, SvelteKit config, and custom error pages.', hasEditor: false }
 		]
 	}
 ];

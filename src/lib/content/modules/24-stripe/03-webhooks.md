@@ -154,7 +154,7 @@ In the Stripe Dashboard:
 1. Go to **Developers** > **Webhooks**
 2. Click **Add endpoint**
 3. Enter your URL: `https://yoursite.com/api/webhooks/stripe`
-4. Select events to listen to: `payment_intent.succeeded`, `payment_intent.payment_failed`
+4. Select events to listen to: `payment_intent.succeeded`, `payment_intent.payment_failed`, `charge.refunded`, `charge.dispute.created`
 5. Copy the signing secret and add it to your production environment variables
 
 ## Passing Metadata
@@ -183,7 +183,8 @@ Set up a webhook endpoint at `/api/webhooks/stripe`. Install the Stripe CLI and 
 
 - Webhooks are the reliable way to handle payment events — never rely solely on client redirects
 - Always verify webhook signatures with `stripe.webhooks.constructEvent()` to prevent fraud
-- Handle `payment_intent.succeeded` to grant access and `payment_intent.payment_failed` for failures
+- Handle `payment_intent.succeeded` to grant access, `payment_intent.payment_failed` for failures, and `charge.refunded` to revoke access
+- For European customers, `automatic_payment_methods` handles Strong Customer Authentication (SCA/3D Secure) automatically
 - Make handlers idempotent by checking for existing records before processing
 - Use the Stripe CLI (`stripe listen`) to test webhooks during local development
 - Pass metadata on Payment Intents to connect payments to users and products

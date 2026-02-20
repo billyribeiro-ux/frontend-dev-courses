@@ -2,7 +2,9 @@
 
 As your SvelteKit application grows, you will encounter situations where multiple components need access to the same data — a shopping cart, user authentication status, or UI settings like sidebar open/closed state. Passing this data through props at every level gets tedious fast. Svelte 5 provides a clean solution: **shared reactive state** using `.svelte.ts` files.
 
-By exporting `$state` from a `.svelte.ts` module, you create reactive state that any component can import and use. Changes are automatically reflected everywhere the state is referenced, with no prop drilling or event bubbling required.
+By creating `$state` in a `.svelte.ts` module and exporting functions to access it, you create reactive state that any component can import and use. Changes are automatically reflected everywhere the state is referenced, with no prop drilling or event bubbling required.
+
+> **Important:** You cannot export `$state` variables directly — `$state` creates a reactive proxy that must stay inside the module. Instead, export functions that read and modify the state. This gives you controlled access from the outside and prevents accidental mutations.
 
 ## Creating Shared State
 
@@ -152,6 +154,8 @@ class AuthState {
   }
 }
 
+// Export a SINGLE instance — this makes it a singleton.
+// Every component that imports `auth` shares the same state.
 export const auth = new AuthState();
 ```
 

@@ -41,6 +41,7 @@ Use derived state to compute validation status in real time:
 
   // Validation rules
   let nameValid = $derived(name.trim().length >= 2);
+  // Simple check for learning purposes — in production, use a validation library
   let emailValid = $derived(email.includes("@") && email.includes("."));
   let subjectValid = $derived(subject !== "");
   let messageValid = $derived(message.trim().length >= 10);

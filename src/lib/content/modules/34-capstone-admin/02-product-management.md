@@ -212,7 +212,7 @@ export const actions = {
 
 ## Image Upload
 
-Handle file uploads and save images to the filesystem or a cloud service:
+Handle file uploads and save images. The example below uses the local filesystem, which works during development but **files in `static/` are lost on every Vercel deployment**. For production, use cloud storage such as Vercel Blob, AWS S3, or Cloudinary instead.
 
 ```typescript
 // src/lib/server/upload.ts

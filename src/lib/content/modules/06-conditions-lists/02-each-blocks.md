@@ -156,23 +156,23 @@ The `(todo.id)` after `as todo` tells Svelte to use the `id` property as a uniqu
 
 ## Empty Lists
 
-You can handle the case when an array is empty by combining `{#each}` with `{#if}`:
+Svelte has a built-in way to handle empty arrays — the `{:else}` clause inside `{#each}`:
 
 ```svelte
 <script>
   let notifications = $state([]);
 </script>
 
-{#if notifications.length === 0}
-  <p class="empty">No notifications yet.</p>
-{:else}
-  <ul>
-    {#each notifications as note}
-      <li>{note}</li>
-    {/each}
-  </ul>
-{/if}
+<ul>
+  {#each notifications as note}
+    <li>{note}</li>
+  {:else}
+    <p class="empty">No notifications yet.</p>
+  {/each}
+</ul>
 ```
+
+The `{:else}` block renders when the array has zero items. This is cleaner than wrapping the whole thing in a separate `{#if}` check.
 
 ## A Complete Example: Task List
 
@@ -240,5 +240,5 @@ Build a "Bookshelf" component with:
 - Access the index with `{#each array as item, index}`
 - Use `(item.id)` for keyed each blocks when items can change
 - Destructure objects directly: `{#each items as { name, price }}`
-- Combine `{#each}` with `{#if}` to handle empty arrays gracefully
+- Use `{:else}` inside `{#each}` to handle empty arrays gracefully
 - Always use keys when list items can be added, removed, or reordered

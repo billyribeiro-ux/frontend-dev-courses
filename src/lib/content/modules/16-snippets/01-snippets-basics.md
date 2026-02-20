@@ -109,10 +109,15 @@ Snippets can accept multiple parameters for complex rendering:
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
+  interface User {
+    name: string;
+    email: string;
+  }
+
   interface Props {
-    data: any[];
+    data: User[];
     header: Snippet;
-    row: Snippet<[any, number]>;
+    row: Snippet<[User, number]>;
   }
 
   let { data, header, row }: Props = $props();

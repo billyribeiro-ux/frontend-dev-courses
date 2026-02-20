@@ -26,8 +26,12 @@ import Stripe from 'stripe';
 const stripe = new Stripe(STRIPE_SECRET_KEY);
 
 export const load: PageServerLoad = async () => {
+  // Always fetch the price from your database — never hardcode or trust client-side amounts
+  // const product = await db.select().from(products).where(eq(products.id, productId)).limit(1);
+  // const amount = product[0].priceInCents;
+
   const paymentIntent = await stripe.paymentIntents.create({
-    amount: 4999,       // $49.99
+    amount: 4999,       // $49.99 — in production, use the database price above
     currency: 'usd',
     automatic_payment_methods: {
       enabled: true
@@ -132,6 +136,8 @@ Handle the form submission to confirm the payment with Stripe:
     const { error } = await stripe.confirmPayment({
       elements,
       confirmParams: {
+        // In production, use a hardcoded path from your own domain
+        // rather than constructing from window.location.origin
         return_url: `${window.location.origin}/checkout/success`
       }
     });

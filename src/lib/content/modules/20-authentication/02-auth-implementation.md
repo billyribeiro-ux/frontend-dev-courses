@@ -202,6 +202,16 @@ export {};
 
 Build the registration and login pages with forms that submit to the actions above. Add proper validation, error display, and use `use:enhance` for smooth submissions. Test the flow: register, get redirected, check that the session cookie exists.
 
+## Security Notes
+
+These are important considerations for production applications:
+
+- **Bcrypt 72-byte limit**: bcrypt silently truncates passwords longer than 72 bytes. For most users this is not an issue, but if you need to support very long passwords, hash with SHA-256 first, then bcrypt the hash.
+- **Rate limiting**: Protect login endpoints against brute-force attacks. Use a library like `rate-limiter-flexible` or implement a simple counter (e.g., max 5 failed attempts per IP per 15 minutes).
+- **Session rotation**: After a successful login, always delete the old session and create a new one. This prevents session fixation attacks.
+- **Expired session cleanup**: Sessions accumulate in the database. Periodically delete expired sessions with a scheduled job or check-and-delete during authentication.
+- **Password complexity**: In production, enforce rules beyond minimum length — require at least one uppercase letter, one number, and one special character. Consider checking against known breached passwords via the haveibeenpwned.com API.
+
 ## Key Takeaways
 
 - Hash passwords with `bcrypt.hash()` during registration and verify with `bcrypt.compare()` during login
@@ -210,3 +220,4 @@ Build the registration and login pages with forms that submit to the actions abo
 - Use `hooks.server.ts` to look up the current user on every request via `event.locals`
 - Always return generic error messages for login failures to avoid leaking information
 - Use `throw redirect(303, '/path')` after successful login or registration
+- Implement rate limiting, session rotation, and expired session cleanup for production

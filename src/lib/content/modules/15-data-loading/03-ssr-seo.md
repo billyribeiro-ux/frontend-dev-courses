@@ -130,7 +130,7 @@ export const prerender = true;
 Or prerender your entire site by setting it in the config:
 
 ```typescript
-// svelte.config.js
+// svelte.config.js (SvelteKit supports both .js and .ts)
 const config = {
   kit: {
     prerender: {

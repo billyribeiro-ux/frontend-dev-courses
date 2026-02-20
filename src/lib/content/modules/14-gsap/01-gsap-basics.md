@@ -56,7 +56,7 @@ Animates an element from its current state to the values you specify:
 
 ### gsap.from() — Animate FROM a state
 
-Animates from the values you specify back to the element's current state. Great for entrance animations:
+Animates from the values you specify back to the element's current state. Great for entrance animations. We use `onMount` here because this is a one-time animation that should run once when the page loads. For animations that react to changing state, use `$effect()` — covered in lesson 3.
 
 ```svelte
 <script lang="ts">

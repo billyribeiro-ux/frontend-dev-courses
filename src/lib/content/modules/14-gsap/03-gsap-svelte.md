@@ -153,6 +153,38 @@ GSAP adds ~30KB to your bundle. For pages that do not use animations, you can la
 
 The `await import()` syntax loads GSAP only when the component mounts, keeping your initial bundle small.
 
+## Respecting Motion Preferences
+
+Some users experience motion sickness or discomfort from animations. Always respect the `prefers-reduced-motion` media query:
+
+```css
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+```
+
+In your GSAP code, check before animating:
+
+```typescript
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+$effect(() => {
+  if (prefersReducedMotion) return; // Skip animations entirely
+
+  const ctx = gsap.context(() => {
+    gsap.from('.element', { opacity: 0, y: 20, duration: 0.6 });
+  });
+
+  return () => ctx.revert();
+});
+```
+
+This is a professional requirement — many users rely on this setting, and ignoring it creates an inaccessible experience.
+
 ## Animating Component Entrance
 
 A reusable pattern for animating any component as it enters the viewport:

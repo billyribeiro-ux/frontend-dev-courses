@@ -4,6 +4,8 @@ Traditional CSS has you writing custom class names and style rules for every ele
 
 Tailwind CSS is the most popular utility-first framework. It provides hundreds of pre-built utility classes that map to CSS properties. Once you get used to the approach, you can build complex layouts and components without ever leaving your markup. This lesson introduces the core concept and the most common utility classes.
 
+> **Note:** This course uses **Tailwind CSS v4**, which has a simplified setup (no config file, CSS-first configuration with `@theme`). If you see older tutorials referencing `tailwind.config.js`, that's the v3 approach — we use the modern v4 way throughout.
+
 ## Traditional CSS vs Utility-First
 
 Here is the same card built both ways:

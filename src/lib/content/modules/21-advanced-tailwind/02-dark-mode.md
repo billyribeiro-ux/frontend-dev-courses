@@ -89,9 +89,13 @@ Add a script to your `app.html` that runs before the page renders to prevent a f
 <html lang="en">
   <head>
     <script>
-      const theme = localStorage.getItem('theme');
-      if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-        document.documentElement.classList.add('dark');
+      try {
+        const theme = localStorage.getItem('theme');
+        if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {
+        // localStorage unavailable (private browsing, etc.)
       }
     </script>
     %sveltekit.head%

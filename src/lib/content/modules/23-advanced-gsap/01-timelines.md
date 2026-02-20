@@ -152,6 +152,22 @@ tl.from('.nav-link', {
 
 Create an animated landing page sequence: first the navbar slides down, then the hero title types in from the left, then the subtitle fades up (overlapping slightly with the title), and finally three feature cards stagger in from below. Add play/pause/restart controls. Use labels to mark the "hero complete" point and trigger the cards from that label.
 
+## Respecting Motion Preferences
+
+Always check the user's motion preference before running complex timeline animations:
+
+```typescript
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+if (!prefersReducedMotion) {
+  const tl = gsap.timeline();
+  tl.from('.title', { y: 50, opacity: 0, duration: 0.8 })
+    .from('.subtitle', { y: 30, opacity: 0, duration: 0.6 });
+}
+```
+
+This is an accessibility requirement — not optional. Many users rely on reduced motion settings.
+
 ## Key Takeaways
 
 - `gsap.timeline()` creates a sequence container for multiple animations

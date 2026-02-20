@@ -73,7 +73,6 @@ Actions can accept a second argument for configuration. Pass the parameter with 
 </script>
 
 <p use:tooltip={message}>Hover over me</p>
-
 <input type="text" bind:value={message} placeholder="Change tooltip text" />
 ```
 
@@ -81,7 +80,7 @@ The `update()` method is called whenever the parameter value changes reactively.
 
 ## TypeScript Typing
 
-Svelte provides an `Action` type for properly typing your actions. It takes three optional generics: the element type, the parameter type, and any custom events the action dispatches:
+Svelte provides an `Action` type from `svelte/action` for properly typing your actions. It takes optional generics for the element type and the parameter type:
 
 ```typescript
 // src/lib/actions/highlight.ts
@@ -112,25 +111,7 @@ export const highlight: Action<HTMLElement, HighlightParams> = (node, params) =>
 };
 ```
 
-```svelte
-<script lang="ts">
-  import { highlight } from '$lib/actions/highlight';
-
-  let color = $state('#e0f7fa');
-  let bold = $state(false);
-</script>
-
-<p use:highlight={{ color, bold }}>Styled by an action</p>
-
-<label>
-  <input type="color" bind:value={color} /> Background
-</label>
-<label>
-  <input type="checkbox" bind:checked={bold} /> Bold
-</label>
-```
-
-By exporting typed actions from separate files, you build a reusable library of DOM behaviors that any component can use.
+Use the typed action in any component with `use:highlight={{ color, bold }}`. By exporting actions from separate files, you build a reusable library of DOM behaviors.
 
 ## Try It
 

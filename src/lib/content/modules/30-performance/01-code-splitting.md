@@ -233,34 +233,17 @@ The mental model: anything inside `+server.ts`, `+page.server.ts`, or `$lib/serv
 
 ## Preloading: Making Navigation Feel Instant
 
-SvelteKit preloads the next page's code and data when a user hovers over a link, making client-side navigation feel instant:
+SvelteKit preloads the next page's code and data when a user hovers over a link:
 
 ```svelte
 <!-- SvelteKit preloads this automatically on hover (default behavior) -->
 <a href="/products">Products</a>
 
-<!-- Preload on viewport entry (for links visible on the page) -->
-<a href="/featured" data-sveltekit-preload-data="hover">Featured</a>
-
 <!-- Disable preloading for rarely-visited pages -->
 <a href="/terms" data-sveltekit-preload-data="off">Terms</a>
 ```
 
-The default behavior (`data-sveltekit-preload-data="hover"`) starts fetching code and data when the user's mouse enters the link. Since there is typically 200-300ms between hovering and clicking, the page is often ready by the time the click happens. This makes your app feel like a native application with zero configuration.
-
-You can also configure preloading at the layout level:
-
-```svelte
-<!-- src/routes/+layout.svelte -->
-<!-- All links in this layout preload on hover -->
-<div data-sveltekit-preload-data="hover">
-  <nav>
-    <a href="/dashboard">Dashboard</a>
-    <a href="/settings">Settings</a>
-  </nav>
-  <slot />
-</div>
-```
+The default behavior starts fetching code and data when the user's mouse enters the link. Since there is typically 200-300ms between hovering and clicking, the page is often ready by the time the click happens. This makes your app feel like a native application with zero configuration. You can also set `data-sveltekit-preload-data="hover"` on a layout wrapper to apply the behavior to all links within it.
 
 ## Real Example: Lazy-Loading a Chart Below the Fold
 

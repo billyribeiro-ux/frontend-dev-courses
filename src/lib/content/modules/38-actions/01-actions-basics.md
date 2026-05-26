@@ -68,26 +68,16 @@ Actions can accept a second argument for configuration. Pass the parameter with 
     const tip = document.createElement('div');
     tip.className = 'tooltip';
     tip.textContent = text;
-    tip.style.cssText = `
-      position: absolute; background: #333; color: white;
-      padding: 4px 8px; border-radius: 4px; font-size: 12px;
-      pointer-events: none; opacity: 0; transition: opacity 0.2s;
-    `;
 
     function show(e: MouseEvent) {
       tip.style.left = `${e.pageX + 10}px`;
       tip.style.top = `${e.pageY + 10}px`;
-      tip.style.opacity = '1';
       document.body.appendChild(tip);
     }
 
-    function hide() {
-      tip.style.opacity = '0';
-      setTimeout(() => tip.remove(), 200);
-    }
+    function hide() { tip.remove(); }
 
     node.addEventListener('mouseenter', show);
-    node.addEventListener('mousemove', show);
     node.addEventListener('mouseleave', hide);
 
     return {
@@ -98,7 +88,6 @@ Actions can accept a second argument for configuration. Pass the parameter with 
       destroy() {
         tip.remove();
         node.removeEventListener('mouseenter', show);
-        node.removeEventListener('mousemove', show);
         node.removeEventListener('mouseleave', hide);
       }
     };
@@ -111,26 +100,7 @@ Actions can accept a second argument for configuration. Pass the parameter with 
 <input type="text" bind:value={message} placeholder="Change tooltip text" />
 ```
 
-The `update()` method is called whenever the parameter value changes reactively. This is how your action stays in sync with Svelte's reactive system. Without it, the tooltip would show stale text after a parameter change.
-
-You can also pass objects as parameters for more complex configuration:
-
-```svelte
-<script lang="ts">
-  function tooltip(node: HTMLElement, params: { text: string; position: 'top' | 'bottom' }) {
-    // ... setup using params.text and params.position
-
-    return {
-      update(newParams: { text: string; position: 'top' | 'bottom' }) {
-        // Handle both text and position changes
-      },
-      destroy() { /* cleanup */ }
-    };
-  }
-</script>
-
-<p use:tooltip={{ text: 'Hello', position: 'top' }}>Hover me</p>
-```
+The `update()` method is called whenever the parameter value changes reactively. Without it, the tooltip would show stale text after a parameter change. You can also pass objects as parameters (`use:tooltip={{ text, position }}`) for more complex configuration — the `update` method receives the entire new object.
 
 ## Real-World Use Case: Click Outside Detection
 
@@ -255,13 +225,12 @@ export const inView: Action<HTMLElement, InViewParams> = (node, params) => {
 
 ## TypeScript Typing
 
-Svelte provides an `Action` type from `svelte/action` for properly typing your actions. It takes optional generics for the element type and the parameter type:
+Svelte provides an `Action` type from `svelte/action` with generics for the element type and parameter type:
 
 ```typescript
-// src/lib/actions/autofocus.ts
 import type { Action } from 'svelte/action';
 
-// No parameters
+// No parameters — typed to HTMLInputElement
 export const autofocus: Action<HTMLInputElement> = (node) => {
   node.focus();
 };
@@ -269,37 +238,23 @@ export const autofocus: Action<HTMLInputElement> = (node) => {
 // With a parameter
 export const maxLength: Action<HTMLInputElement, number> = (node, max) => {
   let currentMax = max;
-
   function handleInput() {
-    if (node.value.length > currentMax) {
-      node.value = node.value.slice(0, currentMax);
-    }
+    if (node.value.length > currentMax) node.value = node.value.slice(0, currentMax);
   }
-
   node.addEventListener('input', handleInput);
-
   return {
-    update(newMax) {
-      currentMax = newMax;
-    },
-    destroy() {
-      node.removeEventListener('input', handleInput);
-    }
+    update(newMax) { currentMax = newMax; },
+    destroy() { node.removeEventListener('input', handleInput); }
   };
 };
 ```
 
 ```svelte
-<script lang="ts">
-  import { autofocus } from '$lib/actions/autofocus';
-  import { maxLength } from '$lib/actions/maxLength';
-</script>
-
 <!-- Type error if used on a <div> — the action expects HTMLInputElement -->
 <input use:autofocus use:maxLength={100} placeholder="Auto-focused, max 100 chars" />
 ```
 
-By typing the first generic as `HTMLInputElement` instead of `HTMLElement`, you get compile-time safety: using the action on a `<div>` would produce a type error. Export typed actions from separate files to build a reusable library of DOM behaviors.
+By typing the first generic as `HTMLInputElement` instead of `HTMLElement`, you get compile-time safety. Export typed actions from `$lib/actions/` to build a reusable library of DOM behaviors.
 
 ## Combining Multiple Actions on a Single Element
 
@@ -327,28 +282,12 @@ One of the strengths of actions is composability. You can attach multiple action
 
 Both actions and `$effect` can manipulate the DOM. The distinction is about **reusability and intent**:
 
-**Use `$effect`** when the behavior is specific to this component and tightly coupled to its state. You would not want to extract it and reuse it elsewhere:
+**Use `$effect`** when the behavior is specific to this component and tightly coupled to its state — like drawing on a canvas based on component-specific reactive values. You would not extract it into a reusable module.
+
+**Use actions** when the behavior is generic and reusable across components:
 
 ```svelte
-<script lang="ts">
-  let canvas: HTMLCanvasElement;
-  let color = $state('#ff0000');
-
-  // Tightly coupled to this component's state and lifecycle
-  $effect(() => {
-    const ctx = canvas.getContext('2d');
-    ctx!.fillStyle = color;
-    ctx!.fillRect(0, 0, canvas.width, canvas.height);
-  });
-</script>
-
-<canvas bind:this={canvas}></canvas>
-```
-
-**Use actions** when the behavior is generic and reusable across components. If you find yourself copy-pasting `$effect` blocks between components, that is a sign you should extract an action:
-
-```svelte
-<!-- Any component can use this — no copy-paste needed -->
+<!-- Any component can use these — no copy-paste needed -->
 <div use:clickOutside={handleClose}>...</div>
 <input use:autofocus />
 <section use:inView={{ onEnter: loadMore, once: true }}>...</section>

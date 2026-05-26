@@ -162,7 +162,7 @@ Consumers can read the value with `$counter` but can only modify it through the 
 | Stores | When using libraries that expose stores (SvelteKit's `page` store, third-party packages), or for interop with non-Svelte code that follows the store contract. |
 | Context | When state is tree-scoped and should not be globally accessible. |
 
-SvelteKit's own `$app/stores` module exposes `page`, `navigating`, and `updated` as stores. You will encounter these frequently. The `$` auto-subscription syntax makes them seamless to use.
+SvelteKit's own `$app/state` module (which replaces the deprecated `$app/stores`) exposes `page`, `navigating`, and `updated` as reactive state. With `$app/state`, you access properties directly (e.g., `page.url`) without the `$` prefix — the values are already reactive.
 
 ## Migration: Stores to Runes
 

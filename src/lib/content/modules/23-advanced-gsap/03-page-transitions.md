@@ -701,7 +701,7 @@ Here is a complete, production-ready transition system combining View Transition
 <!-- src/routes/+layout.svelte -->
 <script lang="ts">
   import { onNavigate, afterNavigate } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import gsap from 'gsap';
 
   let { children } = $props();

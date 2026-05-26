@@ -276,21 +276,21 @@ jobs:
 
 ## The "New Version Available" Banner
 
-After you deploy a new version, users who have the app open in a tab are still running the old code. SvelteKit's `updated` store from `$app/stores` detects when a new version has been deployed and lets you prompt the user to refresh.
+After you deploy a new version, users who have the app open in a tab are still running the old code. SvelteKit's `updated` state from `$app/state` detects when a new version has been deployed and lets you prompt the user to refresh.
 
 ```svelte
 <!-- src/routes/(app)/+layout.svelte -->
 <script lang="ts">
-  import { updated } from '$app/stores';
+  import { updated } from '$app/state';
   import { onMount } from 'svelte';
 
   let showUpdateBanner = $state(false);
 
-  // The updated store is set to true when SvelteKit detects a new version
+  // updated.current is set to true when SvelteKit detects a new version
   // during client-side navigation. This happens because each deployment
   // generates new hashed asset filenames.
   $effect(() => {
-    if ($updated) {
+    if (updated.current) {
       showUpdateBanner = true;
     }
   });
@@ -320,7 +320,7 @@ After you deploy a new version, users who have the app open in a tab are still r
 {@render children()}
 ```
 
-How it works: SvelteKit generates a version hash based on the build output. On each client-side navigation, SvelteKit fetches a small manifest file and compares the version hash. If it has changed, `$updated` becomes `true`. The `updated.check()` method triggers this comparison manually, which is useful for long-running sessions where the user does not navigate frequently.
+How it works: SvelteKit generates a version hash based on the build output. On each client-side navigation, SvelteKit fetches a small manifest file and compares the version hash. If it has changed, `updated.current` becomes `true`. The `updated.check()` method triggers this comparison manually, which is useful for long-running sessions where the user does not navigate frequently.
 
 ## Service Worker Cache Invalidation
 
@@ -523,8 +523,7 @@ You have built a complete, production-grade project manager. Let us look at ever
 | Feature | Where in TeamBoard |
 |---|---|
 | `$app/navigation` | `goto` for programmatic navigation after task creation, `pushState` for task modal URLs, `onNavigate` for View Transitions, `invalidate` for refreshing data |
-| `$app/state` | `page` state for reading URL params, error info, and route data |
-| `$app/stores` | `updated` store for new version detection |
+| `$app/state` | `page` state for reading URL params, error info, and route data; `updated` state for new version detection |
 | `$app/server` | `query()`, `form()`, `command()` remote functions for server-side data operations |
 | `$app/environment` | `browser` check for client-only code, `dev` check for debug features |
 

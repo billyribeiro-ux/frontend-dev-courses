@@ -681,6 +681,100 @@ export const getUsers = query(async () => { /* ... */ });
 
 This becomes unmaintainable quickly. Each function has different dependencies, different validation schemas, and different error handling. Group related functions together so a developer looking for "how products are fetched" knows to look in `products.remote.ts`.
 
+## Error Handling Patterns
+
+Remote functions can fail for many reasons: network errors, server errors, validation failures, database timeouts. How you handle errors determines whether users see helpful feedback or a blank screen.
+
+### Returning Structured Errors
+
+Instead of throwing generic errors, return structured error objects from your remote functions:
+
+```typescript
+// src/lib/api/orders.remote.ts
+import { query } from '$app/server';
+import { error } from '@sveltejs/kit';
+import * as v from 'valibot';
+
+const OrderSchema = v.object({
+  orderId: v.pipe(v.string(), v.uuid())
+});
+
+export const getOrder = query(OrderSchema, async ({ orderId }) => {
+  const order = await db
+    .select()
+    .from(ordersTable)
+    .where(eq(ordersTable.id, orderId))
+    .limit(1);
+
+  if (order.length === 0) {
+    // SvelteKit's error() function returns a proper HTTP error
+    error(404, { message: 'Order not found' });
+  }
+
+  return order[0];
+});
+```
+
+On the client, the `.error` property contains the error object:
+
+```svelte
+<script lang="ts">
+  import { getOrder } from '$lib/api/orders.remote';
+
+  let orderId = $state('...');
+  const order = getOrder({ orderId });
+</script>
+
+{#if order.error}
+  {#if order.error.status === 404}
+    <p>This order does not exist or has been deleted.</p>
+  {:else}
+    <p>Something went wrong. Please try again.</p>
+    <button onclick={() => order.refresh()}>Retry</button>
+  {/if}
+{:else if order.current}
+  <OrderDetails order={order.current} />
+{/if}
+```
+
+### WRONG: Swallowing Errors Silently
+
+```svelte
+<script lang="ts">
+  import { getProducts } from '$lib/api/products.remote';
+
+  const products = getProducts();
+</script>
+
+<!-- WRONG -- no error handling at all -->
+{#if products.current}
+  {#each products.current as product}
+    <li>{product.name}</li>
+  {/each}
+{/if}
+```
+
+If the query fails, the user sees nothing -- no error message, no retry button, just an empty screen. Always handle the `.error` state, even if it is just a generic "something went wrong" message with a retry button.
+
+## Remote Functions vs Load Functions: When to Use Each
+
+Remote functions and load functions both fetch data from the server, but they serve different use cases:
+
+| | Load Functions | Remote Functions |
+|---|---|---|
+| **Scope** | Page-level data | Component-level data |
+| **Execution** | Runs before the page renders | Runs after the component mounts |
+| **SEO** | Data is available during SSR | Data loads after initial render |
+| **URL coupling** | Tied to a specific route | Available in any component |
+| **Waterfall** | SvelteKit parallelizes load functions | Each query is an independent request |
+| **Best for** | Primary page content | Secondary content, deeply nested data |
+
+**Use load functions** when the data is essential for the page to render and should be available during SSR (for SEO, initial paint speed, and accessibility).
+
+**Use remote functions** when the data is secondary, deeply nested, or component-specific -- where threading props through multiple layers would be cumbersome.
+
+In practice, many pages use both: a load function for the primary content, and remote functions for supplementary data that specific components need.
+
 ## Try It
 
 Build a product browser with remote functions:

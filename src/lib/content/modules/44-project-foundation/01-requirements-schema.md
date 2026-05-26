@@ -624,6 +624,78 @@ src/routes/(app)/[teamSlug=teamSlug]/boards/+page.svelte
 
 Without the matcher, a URL like `/dashboard` would match `[teamSlug]`, and the load function would try to look up a team with slug "dashboard" -- which does not exist. The matcher prevents this by only matching valid slug patterns.
 
+## Database Connection
+
+The database module is the foundation everything else builds on. For SQLite with Drizzle, the setup is minimal:
+
+```typescript
+// src/lib/server/database.ts
+import { drizzle } from 'drizzle-orm/libsql';
+import { createClient } from '@libsql/client';
+import * as schema from './schema';
+import { DATABASE_URL } from '$env/static/private';
+
+const client = createClient({
+  url: DATABASE_URL
+});
+
+export const db = drizzle(client, { schema });
+```
+
+### Why $env/static/private for DATABASE_URL
+
+```typescript
+// WRONG -- process.env bypasses SvelteKit's env module system
+const client = createClient({ url: process.env.DATABASE_URL! });
+
+// CORRECT -- $env/static/private is validated at build time
+import { DATABASE_URL } from '$env/static/private';
+const client = createClient({ url: DATABASE_URL });
+```
+
+Using `$env/static/private` provides three guarantees: (1) the variable must exist at build time or the build fails, (2) it is inlined as a literal value (so `DATABASE_URL` never appears in the bundle), and (3) it cannot be imported by client-side code. Using `process.env` provides none of these guarantees.
+
+### WRONG: Importing Database in Client Code
+
+```typescript
+// WRONG -- src/lib/utils/helpers.ts (not in /server/)
+import { db } from '$lib/server/database';
+// This import will fail at build time because $lib/server is protected
+```
+
+The `$lib/server` boundary prevents this at compile time. If you need database data in a component, fetch it through a load function, a form action, or a remote function -- never import the database client directly.
+
+## Drizzle Configuration
+
+```typescript
+// drizzle.config.ts
+import { defineConfig } from 'drizzle-kit';
+
+export default defineConfig({
+  schema: './src/lib/server/schema.ts',
+  out: './drizzle',
+  dialect: 'sqlite',
+  dbCredentials: {
+    url: process.env.DATABASE_URL!
+  }
+});
+```
+
+Note that `drizzle.config.ts` is the one place where `process.env` is correct -- this file runs outside SvelteKit (executed by the `drizzle-kit` CLI), so `$env` modules are not available.
+
+Add these scripts to `package.json` for convenience:
+
+```json
+{
+  "scripts": {
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "db:seed": "tsx scripts/seed.ts"
+  }
+}
+```
+
 ## Try It
 
 Complete the full project foundation:

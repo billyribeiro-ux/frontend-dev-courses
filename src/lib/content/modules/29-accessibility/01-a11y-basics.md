@@ -2,7 +2,7 @@
 
 Accessibility (often shortened to **a11y**) means building websites that everyone can use, including people who navigate with a keyboard, use screen readers, have low vision, or experience cognitive differences. This is not an optional feature you bolt on before launch. It is a fundamental quality of well-engineered software, in the same way that security or performance is. You would never ship a product without authentication. You should never ship one without accessibility either.
 
-Over one billion people worldwide live with some form of disability. When you skip accessibility, you exclude real users from your app. But the moral argument is only half the story. In many jurisdictions, accessibility is a **legal requirement**. The Americans with Disabilities Act (ADA) in the US, the European Accessibility Act (EAA) in the EU, and similar laws in Canada, the UK, Australia, and elsewhere all require digital products to be accessible. Lawsuits over inaccessible websites have grown year after year — over 4,000 ADA-related web accessibility lawsuits were filed in the US in 2023 alone. This is not a theoretical risk — it is happening to companies of every size right now.
+Over one billion people worldwide live with some form of disability. When you skip accessibility, you exclude real users from your app. But the moral argument is only half the story. In many jurisdictions, accessibility is a **legal requirement**. The Americans with Disabilities Act (ADA) in the US, the European Accessibility Act (EAA) in the EU, and similar laws in Canada, the UK, Australia, and elsewhere all require digital products to be accessible. Lawsuits over inaccessible websites have grown year over year — over 4,000 ADA-related web accessibility lawsuits were filed in the US in 2023 alone. This is not a theoretical risk — it is happening to companies of every size right now.
 
 The good news: most accessibility improvements also make your site better for **everyone**. Keyboard navigation helps power users. Good color contrast helps people using their phone in sunlight. Captions help anyone watching video in a noisy cafe. Proper heading structure helps SEO. Form labels help all users understand what to enter. Accessibility is not a zero-sum game — it is a rising tide that lifts all boats.
 
@@ -58,6 +58,81 @@ To build accessible software, you need to understand how different people experi
 
 The key insight: you are not building "for disabled people." You are building for **all the ways people use the web**. Your future self with a broken arm, your colleague in a noisy open office, your user on a slow connection in bright sunlight — they all benefit from accessible design.
 
+## The Accessibility Tree: What Assistive Technologies Actually See
+
+Every browser builds two parallel representations of your page. The first is the **DOM tree** — the complete HTML structure that drives rendering. The second is the **accessibility tree** — a simplified version of the DOM that contains only the information assistive technologies need: names, roles, states, relationships, and descriptions.
+
+Understanding the accessibility tree is the single biggest mental model upgrade you can make as a developer. When you write HTML, you are not just painting pixels — you are constructing a semantic representation that machines will interpret.
+
+```svelte
+<!-- Your HTML -->
+<nav aria-label="Main">
+  <a href="/products">Products</a>
+  <button aria-expanded="false" aria-controls="user-menu">
+    Account
+  </button>
+</nav>
+
+<!-- What the accessibility tree sees -->
+<!--
+  navigation "Main"
+    link "Products"
+      text "Products"
+    button "Account"
+      expanded: false
+      controls: user-menu
+-->
+```
+
+The accessibility tree strips away all visual styling. It does not know about your CSS grid, your colors, or your border radius. It only knows semantics: "this is a navigation landmark called Main, containing a link named Products and a button named Account that controls something and is currently collapsed."
+
+You can inspect the accessibility tree directly:
+
+- **Chrome DevTools**: Elements panel > Accessibility tab, or the dedicated Accessibility panel
+- **Firefox DevTools**: Accessibility tab in the inspector (shows the full tree with roles and properties)
+- **Safari**: Web Inspector > Elements > Node > Accessibility section
+
+Inspecting the accessibility tree should be as routine as inspecting the DOM. If you cannot see an element in the accessibility tree, screen readers cannot see it either.
+
+### How the Accessible Name Is Computed
+
+Every interactive element needs an **accessible name** — the text that a screen reader announces. The browser computes this name using a specific algorithm (the Accessible Name and Description Computation spec), and understanding the priority order prevents bugs:
+
+```svelte
+<!-- Priority 1: aria-labelledby (references another element's text) -->
+<button aria-labelledby="btn-label">
+  <svg aria-hidden="true"><!-- icon --></svg>
+</button>
+<span id="btn-label" class="sr-only">Close dialog</span>
+<!-- Accessible name: "Close dialog" -->
+
+<!-- Priority 2: aria-label (inline string) -->
+<button aria-label="Close dialog">
+  <svg aria-hidden="true"><!-- icon --></svg>
+</button>
+<!-- Accessible name: "Close dialog" -->
+
+<!-- Priority 3: Text content (direct child text or alt text) -->
+<button>Save Changes</button>
+<!-- Accessible name: "Save Changes" -->
+
+<!-- Priority 4: title attribute (lowest priority, avoid relying on this) -->
+<button title="Save Changes">
+  <svg><!-- icon --></svg>
+</button>
+<!-- Accessible name: "Save Changes" — but tooltips are inaccessible to many users -->
+```
+
+A common mistake is setting both `aria-label` and visible text content, then changing one but not the other. The `aria-label` wins, so the screen reader announces something different from what sighted users see. This creates a disconnect that confuses voice control users, who say "click Save" when the button actually has `aria-label="Submit form"`.
+
+```svelte
+<!-- WRONG: visible text says "Save" but aria-label says something else -->
+<button aria-label="Submit form for processing">Save</button>
+
+<!-- CORRECT: aria-label matches or is absent when visible text is sufficient -->
+<button>Save</button>
+```
+
 ## WCAG Guidelines: The Standard Explained
 
 The **Web Content Accessibility Guidelines (WCAG)** are the international standard for web accessibility. The current version is WCAG 2.2 (published in October 2023), though WCAG 2.1 Level AA is still the most commonly referenced legal standard.
@@ -97,6 +172,61 @@ WCAG is organized around four principles:
 - **Level AAA**: The highest level. Includes enhanced contrast ratios, sign language interpretation for video, and more. Aspirational for most projects but worth pursuing for critical content.
 
 **Aim for WCAG 2.2 Level AA** as your baseline. This is what legal requirements reference and what accessibility audits evaluate.
+
+### New in WCAG 2.2
+
+WCAG 2.2 added several new success criteria that are particularly relevant to modern web apps:
+
+- **2.4.11 Focus Not Obscured (Minimum)** (AA): When a component receives keyboard focus, it must not be entirely hidden behind other content like sticky headers or cookie banners. This is a common failure in apps with fixed positioning.
+- **2.4.13 Focus Appearance** (AAA): Focus indicators must have a minimum area and contrast ratio.
+- **2.5.7 Dragging Movements** (AA): Any functionality that uses dragging must also provide a single-pointer alternative. This directly affects drag-and-drop interfaces.
+- **2.5.8 Target Size (Minimum)** (AA): Interactive targets must be at least 24x24 CSS pixels, with specific spacing rules.
+- **3.3.7 Redundant Entry** (A): Information previously entered by the user must be auto-populated or available for selection when needed again.
+- **3.3.8 Accessible Authentication (Minimum)** (AA): Authentication processes must not require cognitive function tests (like CAPTCHA) without an accessible alternative.
+
+```svelte
+<!-- WRONG: drag-and-drop with no alternative (violates 2.5.7) -->
+<div
+  role="listbox"
+  ondragover={handleDragOver}
+  ondrop={handleDrop}
+>
+  {#each items as item}
+    <div draggable="true" ondragstart={(e) => handleDragStart(e, item)}>
+      {item.name}
+    </div>
+  {/each}
+</div>
+
+<!-- CORRECT: drag-and-drop WITH button-based reorder alternative -->
+<ul role="listbox" aria-label="Task list">
+  {#each items as item, index (item.id)}
+    <li
+      role="option"
+      draggable="true"
+      ondragstart={(e) => handleDragStart(e, item)}
+    >
+      <span>{item.name}</span>
+      <div class="reorder-controls">
+        <button
+          aria-label="Move {item.name} up"
+          onclick={() => moveItem(index, index - 1)}
+          disabled={index === 0}
+        >
+          Up
+        </button>
+        <button
+          aria-label="Move {item.name} down"
+          onclick={() => moveItem(index, index + 1)}
+          disabled={index === items.length - 1}
+        >
+          Down
+        </button>
+      </div>
+    </li>
+  {/each}
+</ul>
+```
 
 ## Semantic HTML: The Foundation of Accessibility
 
@@ -220,15 +350,70 @@ A screen reader user now hears: "Main navigation, landmark. Home, link. About, l
 </table>
 ```
 
+### Heading Structure Audit: A Practical Technique
+
+A quick way to audit any page's accessibility is to extract just the headings and see if they form a coherent outline:
+
+```
+WRONG heading structure:
+  h1: Our Products
+  h3: Electronics        ← skipped h2
+  h4: Smartphones        ← skipped from h3 to h4 inconsistently
+  h2: Featured           ← jumped back up to h2
+  h4: Sale Items         ← skipped h3
+
+CORRECT heading structure:
+  h1: Our Products
+  h2: Electronics
+    h3: Smartphones
+    h3: Laptops
+  h2: Featured
+    h3: Sale Items
+    h3: New Arrivals
+```
+
+If you read only the headings, can you understand the page's structure? That is what screen reader users experience when they use heading navigation (the H key in NVDA, VO+Command+H in VoiceOver). The heading structure IS the table of contents.
+
 ## ARIA: When Native HTML Is Not Enough
 
 ARIA (Accessible Rich Internet Applications) is a set of attributes that add semantic meaning to elements. It was created for situations where native HTML cannot express the interaction pattern — custom widgets like tab panels, comboboxes, tree views, carousels, or live-updating regions.
 
-### The First Rule of ARIA
+### The Five Rules of ARIA
 
-**Do not use ARIA if a native HTML element can do the job.** ARIA does not add behavior — it only adds semantics. A `<div role="button">` is announced as a button but still cannot be focused or activated by keyboard without additional code. A real `<button>` does all of that natively.
+The W3C defines five rules for ARIA usage, and understanding all five prevents the most common mistakes:
+
+**Rule 1: Do not use ARIA if a native HTML element can do the job.** ARIA does not add behavior — it only adds semantics. A `<div role="button">` is announced as a button but still cannot be focused or activated by keyboard without additional code. A real `<button>` does all of that natively.
+
+**Rule 2: Do not change native semantics unless you have to.** Do not add `role="heading"` to an `<h2>` — it already has that role. Do not add `role="link"` to an `<a>` — it is already a link. Redundant ARIA is harmless in some cases but signals confusion about the element's purpose.
+
+**Rule 3: All interactive ARIA controls must be usable with a keyboard.** If you set `role="button"` on a `<span>`, you MUST also handle Enter and Space keypress events, add `tabindex="0"`, and manage focus.
+
+**Rule 4: Do not use `role="presentation"` or `aria-hidden="true"` on focusable elements.** Hiding an element from the accessibility tree while leaving it focusable creates a "ghost" — keyboard users can reach it but screen readers cannot announce it.
+
+**Rule 5: All interactive elements must have an accessible name.** Every button, link, input, and custom control needs a name that assistive technology can announce.
 
 Bad ARIA is worse than no ARIA. Incorrect ARIA attributes actively mislead assistive technology users. A `role="button"` on a div tells a screen reader "this is a button" — the user presses Enter expecting an action, and nothing happens because you did not add a keyboard handler. Now the user is confused and stuck.
+
+```svelte
+<!-- WRONG: ARIA used where native HTML would work -->
+<div role="button" tabindex="0" onclick={save} onkeydown={(e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); save(); }
+}}>
+  Save
+</div>
+<!-- This is 4 lines to replicate what <button> does in 1 line -->
+
+<!-- CORRECT: just use a button -->
+<button onclick={save}>Save</button>
+
+<!-- WRONG: aria-hidden on a focusable element (ghost element) -->
+<button aria-hidden="true" onclick={doSomething}>Hidden Action</button>
+
+<!-- CORRECT: if it should be hidden, remove it from both trees -->
+{#if showButton}
+  <button onclick={doSomething}>Action</button>
+{/if}
+```
 
 ### ARIA Roles
 
@@ -287,7 +472,7 @@ Properties describe characteristics. States describe the current condition:
 ```svelte
 <!-- aria-label: accessible name when no visible text exists -->
 <button aria-label="Close dialog" onclick={closeModal}>
-  <svg><!-- X icon --></svg>
+  <svg aria-hidden="true"><!-- X icon --></svg>
 </button>
 
 <!-- aria-describedby: additional description beyond the label -->
@@ -346,10 +531,38 @@ Properties describe characteristics. States describe the current condition:
 
 <!-- aria-current: indicates the current item in a set -->
 <nav>
-  <a href="/" aria-current={$page.url.pathname === '/' ? 'page' : undefined}>Home</a>
-  <a href="/about" aria-current={$page.url.pathname === '/about' ? 'page' : undefined}>About</a>
+  <a href="/" aria-current={currentPath === '/' ? 'page' : undefined}>Home</a>
+  <a href="/about" aria-current={currentPath === '/about' ? 'page' : undefined}>About</a>
 </nav>
 ```
+
+### The `inert` Attribute: A Modern Alternative to aria-hidden
+
+The `inert` attribute is a newer HTML feature that solves a common problem: making an entire subtree both invisible to assistive technology AND non-interactive for keyboard users. Before `inert`, you had to combine `aria-hidden="true"` with `tabindex="-1"` on every focusable element — tedious and error-prone.
+
+```svelte
+<script lang="ts">
+  let isModalOpen = $state(false);
+</script>
+
+<!-- When the modal is open, the rest of the page is inert -->
+<div inert={isModalOpen}>
+  <header>...</header>
+  <main>
+    <!-- All focusable elements in here are automatically
+         unfocusable and hidden from assistive technology -->
+  </main>
+  <footer>...</footer>
+</div>
+
+{#if isModalOpen}
+  <dialog open>
+    <!-- Modal content — the only interactive area -->
+  </dialog>
+{/if}
+```
+
+The `inert` attribute does three things simultaneously: removes all elements from the tab order, hides the subtree from the accessibility tree, and prevents click/touch events. It is the correct modern approach for managing background content when a modal or drawer is open, and it is supported in all modern browsers.
 
 ### Live Regions: Announcing Dynamic Content
 
@@ -359,6 +572,22 @@ Live regions tell screen readers to announce content changes without moving focu
 - `aria-live="assertive"` — interrupts the current speech immediately. Use sparingly, only for urgent messages (errors, security warnings).
 - `role="alert"` — shorthand for `aria-live="assertive"` with `aria-atomic="true"`.
 - `role="status"` — shorthand for `aria-live="polite"` with `aria-atomic="true"`.
+
+A critical gotcha with live regions: **the live region element must exist in the DOM before the content changes.** If you conditionally render the live region itself, the screen reader may not detect the change because it was not monitoring that element:
+
+```svelte
+<!-- WRONG: live region is conditionally rendered — screen reader may miss it -->
+{#if errorMessage}
+  <div role="alert">{errorMessage}</div>
+{/if}
+
+<!-- CORRECT: live region is always in the DOM, content changes inside it -->
+<div role="alert" aria-atomic="true">
+  {#if errorMessage}
+    {errorMessage}
+  {/if}
+</div>
+```
 
 ```svelte
 <!-- Toast notification system with live region -->
@@ -373,6 +602,42 @@ Live regions tell screen readers to announce content changes without moving focu
   </div>
 {/if}
 ```
+
+### Practical Live Region Patterns
+
+Here are common patterns where live regions are essential:
+
+```svelte
+<!-- Search results count -->
+<div role="status" aria-live="polite" aria-atomic="true">
+  {results.length} results found for "{searchTerm}"
+</div>
+
+<!-- Form submission status -->
+<div aria-live="polite" aria-atomic="true">
+  {#if formState === 'submitting'}
+    Submitting your order...
+  {:else if formState === 'success'}
+    Order placed successfully. Confirmation number: {confirmationId}
+  {:else if formState === 'error'}
+    Order failed. {errorMessage}
+  {/if}
+</div>
+
+<!-- Countdown timer -->
+<div role="timer" aria-live="assertive" aria-atomic="true">
+  {minutes}:{seconds.toString().padStart(2, '0')} remaining
+</div>
+
+<!-- Chat messages — announce new ones without interrupting -->
+<div aria-live="polite" aria-relevant="additions">
+  {#each messages as message (message.id)}
+    <p>{message.author}: {message.text}</p>
+  {/each}
+</div>
+```
+
+The `aria-relevant` attribute controls what types of changes trigger announcements: `additions` (new content), `removals` (removed content), `text` (text changes), or `all`. The default is `additions text`.
 
 ## Keyboard Navigation and Focus Management
 
@@ -401,6 +666,29 @@ Users must always be able to see where focus is. The default browser focus ring 
 
 /* :focus-visible only shows for keyboard users, not mouse clicks */
 /* This gives you the best of both worlds */
+```
+
+Here is a more comprehensive approach that works with dark mode:
+
+```css
+/* Base focus style — works in both light and dark themes */
+:focus-visible {
+  outline: 2px solid var(--color-focus-ring, #4f46e5);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* High contrast mode support */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 3px solid Highlight;
+  }
+}
+
+/* Make sure focus rings are never clipped by overflow:hidden parents */
+.card:focus-within {
+  overflow: visible;
+}
 ```
 
 ### Roving Tabindex
@@ -459,6 +747,63 @@ In composite widgets (tablists, menus, toolbars), users expect to Tab into the w
 
 Only the active item has `tabindex="0"`. All other items have `tabindex="-1"`. When the user presses Tab, they enter the widget at the active item. Arrow keys move focus between items. Tab again moves focus out of the widget entirely. This is the expected keyboard interaction pattern for composite widgets per the WAI-ARIA Authoring Practices.
 
+### Type-ahead Search in Lists
+
+For long lists of items (like a dropdown menu or a listbox), users expect to be able to type characters to jump to matching items. This is called type-ahead or typeahead search, and implementing it is a hallmark of thoughtful accessibility work:
+
+```svelte
+<script lang="ts">
+  let options = ['Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', /* ... */];
+  let activeIndex = $state(0);
+  let searchBuffer = $state('');
+  let searchTimeout: ReturnType<typeof setTimeout>;
+  let optionRefs: HTMLElement[] = [];
+
+  function handleKeyDown(event: KeyboardEvent) {
+    // Handle arrow keys, Home, End as before...
+    if (event.key === 'ArrowDown') {
+      activeIndex = Math.min(activeIndex + 1, options.length - 1);
+      optionRefs[activeIndex]?.focus();
+      event.preventDefault();
+    } else if (event.key === 'ArrowUp') {
+      activeIndex = Math.max(activeIndex - 1, 0);
+      optionRefs[activeIndex]?.focus();
+      event.preventDefault();
+    } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
+      // Type-ahead: accumulate characters and find a match
+      clearTimeout(searchTimeout);
+      searchBuffer += event.key.toLowerCase();
+
+      const matchIndex = options.findIndex(
+        opt => opt.toLowerCase().startsWith(searchBuffer)
+      );
+      if (matchIndex !== -1) {
+        activeIndex = matchIndex;
+        optionRefs[matchIndex]?.focus();
+      }
+
+      // Clear the search buffer after 500ms of inactivity
+      searchTimeout = setTimeout(() => {
+        searchBuffer = '';
+      }, 500);
+    }
+  }
+</script>
+
+<ul role="listbox" aria-label="Select state" onkeydown={handleKeyDown}>
+  {#each options as option, i (option)}
+    <li
+      bind:this={optionRefs[i]}
+      role="option"
+      aria-selected={i === activeIndex}
+      tabindex={i === activeIndex ? 0 : -1}
+    >
+      {option}
+    </li>
+  {/each}
+</ul>
+```
+
 ### Skip Links
 
 Long navigation menus force keyboard users to Tab through dozens of links before reaching the main content. A "skip to content" link solves this:
@@ -497,6 +842,16 @@ Long navigation menus force keyboard users to Tab through dozens of links before
 
 The skip link is visually hidden until focused. When a keyboard user presses Tab on page load, this is the first thing they encounter. Pressing Enter jumps directly to the main content. The `tabindex="-1"` on `<main>` allows it to receive programmatic focus without appearing in the natural Tab order.
 
+For complex applications, you might need multiple skip links:
+
+```svelte
+<div class="skip-links">
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  <a href="#search" class="skip-link">Skip to search</a>
+  <a href="#footer-nav" class="skip-link">Skip to footer navigation</a>
+</div>
+```
+
 ## Focus Trapping and the Dialog Element
 
 When a modal opens, focus must move into the modal. While the modal is open, Tab should be **trapped** inside — it should not escape to the page behind. When the modal closes, focus must return to the trigger. Getting this wrong creates a disorienting experience for keyboard and screen reader users.
@@ -521,12 +876,6 @@ The native `<dialog>` element handles most focus management automatically:
     isOpen = false;
     triggerEl.focus(); // Return focus to the trigger
   }
-
-  function handleKeyDown(event: KeyboardEvent) {
-    if (event.key === 'Escape') {
-      closeModal();
-    }
-  }
 </script>
 
 <button bind:this={triggerEl} onclick={openModal}>
@@ -536,7 +885,6 @@ The native `<dialog>` element handles most focus management automatically:
 <dialog
   bind:this={dialogEl}
   onclose={closeModal}
-  onkeydown={handleKeyDown}
   aria-labelledby="dialog-title"
   aria-describedby="dialog-description"
 >
@@ -596,6 +944,35 @@ The native `<dialog>` element handles most focus management automatically:
 5. Pressing Escape fires the `close` event
 
 This is a massive amount of accessibility behavior that you get for free from a single HTML element. Before `<dialog>`, implementing a fully accessible modal required hundreds of lines of JavaScript.
+
+### Initial Focus in Dialogs
+
+By default, `showModal()` moves focus to the first focusable element in the dialog. But this is not always the best choice. In a confirmation dialog, you might want focus on the "Cancel" button (the safe choice) rather than the "Delete" button. In a search dialog, you want focus on the search input:
+
+```svelte
+<script lang="ts">
+  let dialogEl: HTMLDialogElement;
+  let searchInputEl: HTMLInputElement;
+
+  function openSearchDialog() {
+    dialogEl.showModal();
+    // Override default focus behavior — focus the search input
+    searchInputEl.focus();
+  }
+</script>
+
+<dialog bind:this={dialogEl} aria-label="Search">
+  <input
+    bind:this={searchInputEl}
+    type="search"
+    placeholder="Search products..."
+    aria-label="Search products"
+  />
+  <!-- results -->
+</dialog>
+```
+
+You can also use the `autofocus` attribute on the element you want focused first, though Svelte will warn about this for accessibility reasons (autofocus can disorient screen reader users). In a dialog context, it is generally acceptable.
 
 ### Custom Focus Trap (When Dialog Is Not Enough)
 
@@ -672,6 +1049,83 @@ Sometimes you need focus trapping outside of a dialog — for example, a slide-o
 {/if}
 ```
 
+### Focus Restoration Patterns
+
+A subtle but important detail: when any overlay, drawer, or popover closes, focus must return to a logical place. Usually this is the element that triggered the open action:
+
+```svelte
+<script lang="ts">
+  let triggerRef: HTMLButtonElement;
+  let isOpen = $state(false);
+
+  function open() {
+    isOpen = true;
+  }
+
+  function close() {
+    isOpen = false;
+    // Restore focus — critical for keyboard users
+    // Use requestAnimationFrame to ensure DOM has updated
+    requestAnimationFrame(() => {
+      triggerRef?.focus();
+    });
+  }
+</script>
+
+<button bind:this={triggerRef} onclick={open}>
+  Open Menu
+</button>
+
+{#if isOpen}
+  <div role="menu" aria-label="Actions">
+    <button role="menuitem" onclick={() => { doAction(); close(); }}>
+      Action 1
+    </button>
+    <button role="menuitem" onclick={() => { doOther(); close(); }}>
+      Action 2
+    </button>
+  </div>
+{/if}
+```
+
+But what if the trigger element is removed from the DOM? (For example, deleting an item from a list removes the delete button.) In that case, move focus to the next logical element — the next item in the list, the previous item, or the list's heading:
+
+```svelte
+<script lang="ts">
+  let items = $state([{ id: 1, name: 'A' }, { id: 2, name: 'B' }, { id: 3, name: 'C' }]);
+  let itemRefs: Map<number, HTMLElement> = new Map();
+  let listHeadingRef: HTMLElement;
+
+  function deleteItem(id: number, index: number) {
+    items = items.filter(i => i.id !== id);
+
+    requestAnimationFrame(() => {
+      // Try to focus the next item, then the previous, then the heading
+      const nextItem = items[index];
+      const prevItem = items[index - 1];
+
+      if (nextItem && itemRefs.has(nextItem.id)) {
+        itemRefs.get(nextItem.id)?.focus();
+      } else if (prevItem && itemRefs.has(prevItem.id)) {
+        itemRefs.get(prevItem.id)?.focus();
+      } else {
+        listHeadingRef?.focus();
+      }
+    });
+  }
+</script>
+
+<h2 bind:this={listHeadingRef} tabindex="-1">Items</h2>
+<ul>
+  {#each items as item, index (item.id)}
+    <li bind:this={itemRefs.set(item.id, this) && undefined}>
+      {item.name}
+      <button onclick={() => deleteItem(item.id, index)}>Delete</button>
+    </li>
+  {/each}
+</ul>
+```
+
 ## Color Contrast: Beyond the Basics
 
 Insufficient color contrast is the single most common accessibility failure found in automated audits. WebAIM's annual survey consistently finds that over 80% of home pages have contrast failures.
@@ -722,6 +1176,22 @@ Color vision deficiency affects approximately 300 million people worldwide. If a
 <!-- CORRECT: color + pattern + label for charts -->
 <div class="chart-line" style="color: red; border-style: solid">Revenue (solid red line)</div>
 <div class="chart-line" style="color: green; border-style: dashed">Expenses (dashed green line)</div>
+```
+
+### Contrast in Dark Mode
+
+Dark mode introduces unique contrast challenges. Many developers assume they can simply invert their light mode colors, but perception is asymmetric — white text on a dark background and dark text on a white background at the same mathematical contrast ratio do NOT appear equally readable:
+
+```svelte
+<!-- WRONG: same gray used in both modes — passes in light, fails in dark -->
+<p class="text-gray-500 dark:text-gray-500">Subtle text</p>
+<!-- Light mode: #6b7280 on #ffffff = 4.6:1 (passes AA) -->
+<!-- Dark mode: #6b7280 on #111827 = 3.8:1 (fails AA) -->
+
+<!-- CORRECT: different shades per mode to maintain adequate contrast -->
+<p class="text-gray-600 dark:text-gray-400">Subtle text</p>
+<!-- Light mode: #4b5563 on #ffffff = 7.0:1 (passes AA) -->
+<!-- Dark mode: #9ca3af on #111827 = 5.5:1 (passes AA) -->
 ```
 
 ### Tools for Checking Contrast
@@ -780,6 +1250,20 @@ These warnings are not exhaustive — they catch the low-hanging fruit. But they
 <button onclick={handleClick}>Click me</button>
 ```
 
+### When Svelte Ignore Is Legitimate
+
+There are rare cases where suppressing a Svelte a11y warning is the right call. Document why whenever you do:
+
+```svelte
+<!-- This overlay needs onclick to close when clicked outside the panel.
+     Keyboard users close via Escape, which is handled on the panel.
+     The overlay is not an interactive element in the accessibility tree. -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="overlay" onclick={close}></div>
+```
+
+If you cannot write a clear justification, the warning is probably right and you should fix the code instead.
+
 ## Alt Text: The Art of Description
 
 Every `<img>` needs an `alt` attribute. But writing good alt text is a skill, not just a checkbox:
@@ -833,6 +1317,16 @@ Every `<img>` needs an `alt` attribute. But writing good alt text is a skill, no
 
 Write alt text that conveys the **purpose** of the image, not just what it looks like. "Photo of a dog" is less useful than "Golden retriever playing fetch in the park." But context matters — if the image is on a dog breed identification page, "Golden retriever" is the right alt text. The purpose determines the description.
 
+### Alt Text Decision Tree
+
+Use this flowchart to decide what kind of alt text to write:
+
+1. **Is the image purely decorative?** (borders, spacers, background textures) → `alt=""`
+2. **Is the image inside an interactive element?** (link, button) → Describe the action or destination, not the image
+3. **Does the image contain text?** (screenshot, sign, badge) → Include all the text in the alt
+4. **Is the image a chart or graph?** → Summarize the key data point or trend; put full data in a table
+5. **Is the image a photograph used for content?** → Describe what is happening and why it matters in context
+
 ## Screen Reader Testing: A Practical Walkthrough
 
 Automated tools catch roughly 30-50% of accessibility issues. The rest require manual testing with actual assistive technologies. Here is how to get started:
@@ -862,6 +1356,16 @@ When testing with a screen reader, ask yourself:
 3. **Are form fields labeled?** When I Tab to an input, does it announce what to enter?
 4. **Are dynamic changes announced?** When a form shows an error, does the screen reader say something?
 5. **Can I complete the task?** Can I fill out the form, submit it, and understand the result — all without seeing the screen?
+
+### Common Screen Reader Gotchas
+
+These are issues that only surface during screen reader testing — automated tools miss them all:
+
+- **Unlabeled icon buttons**: Screen readers announce "button" with no name, or worse, announce the SVG filename
+- **Reading order mismatch**: CSS grid or flexbox reordering creates a visual layout that does not match the DOM order. Screen readers follow DOM order, so users hear content in a confusing sequence.
+- **Overly verbose descriptions**: An `aria-label` of "Click this button to add the currently selected item to your shopping cart for later purchase" is exhausting to hear repeatedly. Keep labels concise: "Add to cart."
+- **Dynamic content not announced**: A toast notification appears visually but is not in a live region, so screen reader users never know about it
+- **Modal escape routes**: The dialog traps Tab correctly, but pressing Escape does not close it, or the dialog opens without moving focus into it
 
 ## Complete Accessible Component: Notification Toast System
 
@@ -987,6 +1491,113 @@ Key accessibility patterns in this component:
 3. **Semantic toast types**: Each toast type (success, error, warning, info) is announced with its type so screen reader users understand the severity.
 4. **Non-intrusive announcements**: `aria-live="polite"` waits for the screen reader to finish before announcing, avoiding interruption of the user's workflow.
 
+## Accessible Forms: A Comprehensive Pattern
+
+Forms are where accessibility most directly impacts business outcomes. An inaccessible checkout form loses sales. An inaccessible signup form loses users. Here is a complete accessible form pattern:
+
+```svelte
+<script lang="ts">
+  let name = $state('');
+  let email = $state('');
+  let errors = $state<Record<string, string>>({});
+  let submitted = $state(false);
+  let statusMessage = $state('');
+
+  function validate(): boolean {
+    const newErrors: Record<string, string> = {};
+
+    if (!name.trim()) {
+      newErrors.name = 'Name is required';
+    }
+    if (!email.trim()) {
+      newErrors.email = 'Email is required';
+    } else if (!email.includes('@')) {
+      newErrors.email = 'Please enter a valid email address';
+    }
+
+    errors = newErrors;
+    return Object.keys(newErrors).length === 0;
+  }
+
+  function handleSubmit(event: SubmitEvent) {
+    event.preventDefault();
+
+    if (!validate()) {
+      // Focus the first field with an error
+      const firstErrorField = document.querySelector<HTMLElement>(
+        '[aria-invalid="true"]'
+      );
+      firstErrorField?.focus();
+      statusMessage = `${Object.keys(errors).length} errors found. Please correct and try again.`;
+      return;
+    }
+
+    statusMessage = 'Form submitted successfully.';
+    submitted = true;
+  }
+</script>
+
+<!-- Live region for form status announcements -->
+<div role="status" aria-live="polite" aria-atomic="true" class="sr-only">
+  {statusMessage}
+</div>
+
+<form onsubmit={handleSubmit} novalidate>
+  <div>
+    <label for="name">
+      Name
+      <span aria-hidden="true" class="text-red-500">*</span>
+    </label>
+    <input
+      id="name"
+      type="text"
+      bind:value={name}
+      required
+      aria-required="true"
+      aria-invalid={errors.name ? true : undefined}
+      aria-describedby={errors.name ? 'name-error' : undefined}
+    />
+    {#if errors.name}
+      <p id="name-error" class="error-message" role="alert">
+        {errors.name}
+      </p>
+    {/if}
+  </div>
+
+  <div>
+    <label for="email">
+      Email
+      <span aria-hidden="true" class="text-red-500">*</span>
+    </label>
+    <input
+      id="email"
+      type="email"
+      bind:value={email}
+      required
+      aria-required="true"
+      aria-invalid={errors.email ? true : undefined}
+      aria-describedby={errors.email ? 'email-error' : 'email-hint'}
+    />
+    <p id="email-hint" class="hint-text">We will never share your email</p>
+    {#if errors.email}
+      <p id="email-error" class="error-message" role="alert">
+        {errors.email}
+      </p>
+    {/if}
+  </div>
+
+  <button type="submit">Register</button>
+</form>
+```
+
+Key patterns in this form:
+
+- **Required fields**: Use both `required` (native validation) and `aria-required="true"` (screen reader announcement). The visual asterisk is `aria-hidden` because the ARIA attribute already communicates required status.
+- **Error association**: `aria-describedby` links each input to its error message. When the input has focus, the screen reader reads both the label and the error.
+- **Error focus**: On validation failure, focus moves to the first invalid field so the user knows where to start fixing.
+- **Error summary**: The live region announces how many errors were found, giving users context before they navigate to each one.
+- **Hint text**: `aria-describedby` can point to hint text when there are no errors, and switches to the error message when one appears.
+
 ## Testing Accessibility: A Comprehensive Strategy
 
 Building accessible software requires testing with the same rigor you apply to functionality:
@@ -1014,6 +1625,16 @@ test('navigation is accessible', async ({ page }) => {
   expect(results.violations).toEqual([]);
 });
 
+// Test after user interactions — dynamic content matters
+test('modal is accessible when open', async ({ page }) => {
+  await page.goto('/');
+  await page.click('button[aria-label="Open settings"]');
+  const results = await new AxeBuilder({ page })
+    .include('dialog')
+    .analyze();
+  expect(results.violations).toEqual([]);
+});
+
 // Exclude known issues (temporarily)
 test('main content is accessible', async ({ page }) => {
   await page.goto('/');
@@ -1035,6 +1656,7 @@ Unplug your mouse (or just do not touch it) and try to complete every user flow:
 - Does focus return to a logical place after closing a modal or completing an action?
 - Can you navigate form fields and understand what each one expects?
 - Can you use the entire checkout flow, fill in all forms, and submit?
+- Are there any "keyboard traps" — places where you can Tab in but cannot Tab out?
 
 ### 3. Screen Reader Testing
 
@@ -1071,34 +1693,59 @@ export default defineConfig({
 });
 ```
 
+### 6. The Accessibility Testing Pyramid
+
+Think of accessibility testing as a pyramid, similar to the test pyramid:
+
+```
+         /\
+        /  \
+       / UT \      User testing with people who use assistive technology
+      /------\
+     / Manual \    Keyboard testing + screen reader testing
+    /----------\
+   / Automated  \  axe-core, Lighthouse, Svelte compiler warnings
+  /--------------\
+```
+
+The base (automated) catches the most issues at the lowest cost. The middle (manual) catches interaction issues that automation misses. The top (user testing) catches usability issues that even manual testing misses. You need all three layers.
+
 Automated tools catch roughly 30-50% of accessibility issues. The rest require manual testing. A passing Lighthouse score does not mean your app is accessible — it means you have avoided the most obvious mistakes. Real accessibility testing includes keyboard navigation, screen reader testing, and ideally, user testing with people who rely on assistive technologies.
 
 ## Try It
 
 1. **Audit**: Take one of your existing Svelte pages. Replace any `<div>` elements that should be semantic elements (`<nav>`, `<main>`, `<button>`, `<header>`). Add missing `alt` attributes to images. Ensure headings follow a logical order (h1, h2, h3 — no skipping). Add `aria-label` to any icon-only buttons. Run the axe browser extension and fix every issue it reports.
 
-2. **Build**: Create a fully accessible modal using the native `<dialog>` element. Verify that: (a) focus moves into the modal when it opens, (b) Tab cycles only through elements inside the modal, (c) Escape closes it, (d) focus returns to the trigger button when it closes, (e) the modal has `aria-labelledby` pointing to its heading, (f) the backdrop prevents interaction with the page behind.
+2. **Build**: Create a fully accessible modal using the native `<dialog>` element. Verify that: (a) focus moves into the modal when it opens, (b) Tab cycles only through elements inside the modal, (c) Escape closes it, (d) focus returns to the trigger button when it closes, (e) the modal has `aria-labelledby` pointing to its heading, (f) the backdrop prevents interaction with the page behind. Use the `inert` attribute on the page content behind the dialog.
 
 3. **Keyboard test**: Navigate your entire application using only the keyboard. Document every place you get stuck (cannot reach, cannot activate, cannot see focus, cannot escape). Fix each issue.
 
 4. **Screen reader test**: Turn on VoiceOver (Mac: Cmd+F5) or install NVDA (Windows). Navigate your app using only the screen reader's navigation commands. Can you understand the page structure? Can you complete the primary user flow? Write down three things you discovered that surprised you.
 
-5. **Advanced**: Build an accessible autocomplete/combobox component with the following behavior: (a) typing filters a dropdown list, (b) arrow keys navigate options, (c) Enter selects the focused option, (d) Escape closes the dropdown, (e) the input has `role="combobox"`, `aria-expanded`, `aria-controls`, and `aria-activedescendant` attributes, (f) options have `role="option"` with `aria-selected`, (g) results count is announced via a live region.
+5. **Advanced**: Build an accessible autocomplete/combobox component with the following behavior: (a) typing filters a dropdown list, (b) arrow keys navigate options, (c) Enter selects the focused option, (d) Escape closes the dropdown, (e) the input has `role="combobox"`, `aria-expanded`, `aria-controls`, and `aria-activedescendant` attributes, (f) options have `role="option"` with `aria-selected`, (g) results count is announced via a live region. Implement type-ahead search so that typing "ca" highlights "California" in the list.
+
+6. **Form challenge**: Build an accessible multi-step form (wizard) with: progress indication announced to screen readers, error summary on each step, focus management when moving between steps, and a review step that lets users go back and edit previous answers. Each step should validate before allowing progression.
 
 ## Key Takeaways
 
 - Accessibility is a legal requirement in many jurisdictions and a moral imperative — it is not optional
+- The accessibility tree is a parallel representation of your page that assistive technologies consume — inspect it as routinely as you inspect the DOM
 - Different users experience the web in fundamentally different ways: screen readers, keyboard-only, voice control, switch devices, magnification, high contrast, reduced motion
 - Semantic HTML is the foundation — the right element gives you accessibility for free. A `<button>` is focusable, keyboard-operable, and announced correctly. A `<div>` gives you nothing.
-- ARIA fills gaps when native HTML is insufficient, but the first rule of ARIA is "do not use ARIA" if native HTML can do the job. Bad ARIA is worse than no ARIA.
-- Focus management is critical for dynamic UIs — modals need focus trapping and focus restoration. Use the native `<dialog>` element whenever possible.
+- The five rules of ARIA: (1) prefer native HTML, (2) do not override native semantics, (3) interactive controls must be keyboard-operable, (4) do not hide focusable elements, (5) all interactive elements need accessible names
+- Bad ARIA is worse than no ARIA — incorrect attributes actively mislead assistive technology users
+- Focus management is critical for dynamic UIs — modals need focus trapping and focus restoration. Use the native `<dialog>` element whenever possible. Use `inert` for background content.
 - Roving tabindex is the correct pattern for composite widgets (tabs, toolbars, menus) — only the active item has `tabindex="0"`, arrow keys move between items
+- Live regions (`aria-live`) must exist in the DOM before content changes — conditionally rendering the live region element itself can cause announcements to be missed
 - Color contrast must meet WCAG AA (4.5:1 for text, 3:1 for large text and UI components) — and never rely on color alone to convey information
+- Dark mode contrast is not symmetric — verify contrast ratios separately for each color scheme
 - APCA is the next-generation contrast algorithm that accounts for polarity, font weight, and spatial frequency — be aware of it even though WCAG 2.2 AA ratios are still the standard
-- Svelte's compiler catches 20+ categories of a11y mistakes at build time — pay attention to those warnings and do not suppress them without a good reason
-- Live regions (`aria-live`) announce dynamic content changes to screen readers without moving focus — essential for notifications, form errors, and status updates
+- WCAG 2.2 adds new criteria for focus visibility, dragging alternatives, minimum target sizes, and accessible authentication
+- Svelte's compiler catches 20+ categories of a11y mistakes at build time — pay attention to those warnings and do not suppress them without a documented justification
 - Skip links let keyboard users bypass navigation to reach main content directly
-- Automated tools catch 30-50% of issues; keyboard testing, screen reader testing, and user testing catch the rest
+- Accessible forms need: labels on every input, `aria-required` for required fields, `aria-invalid` for errors, `aria-describedby` for help text and error messages, focus management on validation failure, and error summaries in live regions
+- Automated tools catch 30-50% of issues; keyboard testing, screen reader testing, and user testing catch the rest — you need all three layers
 - Write alt text that conveys the purpose of the image, not just its appearance — and use empty `alt=""` for decorative images
 - Respect `prefers-reduced-motion` — disable animations for users who experience vestibular disorders
 - Test with real assistive technologies: VoiceOver, NVDA, keyboard-only navigation. A Lighthouse score is not sufficient.
+- Focus restoration after interactions (closing modals, deleting items, completing actions) is critical — always return focus to a logical element

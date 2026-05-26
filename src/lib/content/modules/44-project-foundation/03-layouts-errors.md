@@ -32,8 +32,6 @@ The root layout wraps everything. It sets up View Transitions so page navigation
 <!-- src/routes/+layout.svelte -->
 <script lang="ts">
   import { onNavigate } from '$app/navigation';
-  import { page } from '$app/stores';
-
   let { children } = $props();
 
   onNavigate((navigation) => {
@@ -126,7 +124,7 @@ If `event.locals.user` is null (the auth hook did not find a valid session), the
 ```svelte
 <!-- src/routes/(app)/+layout.svelte -->
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
 
   let { data, children } = $props();
 </script>
@@ -142,8 +140,8 @@ If `event.locals.user` is null (the auth hook did not find a valid session), the
       <a
         href="/dashboard"
         class="block px-3 py-2 rounded-lg"
-        class:bg-indigo-50={$page.url.pathname === '/dashboard'}
-        class:dark:bg-indigo-900={$page.url.pathname === '/dashboard'}
+        class:bg-indigo-50={page.url.pathname === '/dashboard'}
+        class:dark:bg-indigo-900={page.url.pathname === '/dashboard'}
       >
         Dashboard
       </a>
@@ -289,20 +287,20 @@ The root error page handles 404s and unexpected errors across the entire app:
 ```svelte
 <!-- src/routes/+error.svelte -->
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
 </script>
 
 <svelte:head>
-  <title>Error {$page.status}</title>
+  <title>Error {page.status}</title>
 </svelte:head>
 
 <div class="min-h-screen flex items-center justify-center">
   <div class="text-center">
-    <h1 class="text-6xl font-bold text-gray-300">{$page.status}</h1>
-    <p class="text-xl mt-4">{$page.error?.message ?? 'Something went wrong'}</p>
+    <h1 class="text-6xl font-bold text-gray-300">{page.status}</h1>
+    <p class="text-xl mt-4">{page.error?.message ?? 'Something went wrong'}</p>
 
-    {#if $page.error?.errorId}
-      <p class="text-sm text-gray-500 mt-2">Error ID: {$page.error.errorId}</p>
+    {#if page.error?.errorId}
+      <p class="text-sm text-gray-500 mt-2">Error ID: {page.error.errorId}</p>
     {/if}
 
     <a href="/" class="inline-block mt-6 text-indigo-600 hover:underline">
@@ -317,18 +315,18 @@ The app-level error page is more specific — it includes the sidebar and a "bac
 ```svelte
 <!-- src/routes/(app)/+error.svelte -->
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
 </script>
 
 <div class="p-8">
   <h1 class="text-2xl font-bold">
-    {$page.status === 404 ? 'Page Not Found' : 'Something Went Wrong'}
+    {page.status === 404 ? 'Page Not Found' : 'Something Went Wrong'}
   </h1>
-  <p class="mt-2 text-gray-600">{$page.error?.message}</p>
+  <p class="mt-2 text-gray-600">{page.error?.message}</p>
 
-  {#if $page.error?.errorId}
+  {#if page.error?.errorId}
     <p class="text-sm text-gray-400 mt-1">
-      Reference: {$page.error.errorId}
+      Reference: {page.error.errorId}
     </p>
   {/if}
 

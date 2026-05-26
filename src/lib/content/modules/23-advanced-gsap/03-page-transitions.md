@@ -129,13 +129,13 @@ You can change the transition direction based on where the user is navigating. S
 <!-- src/routes/+layout.svelte -->
 <script lang="ts">
   import { onNavigate } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
 
   let { children } = $props();
   let direction = $state<'forward' | 'back'>('forward');
 
   // Track navigation direction based on URL path depth
-  const pathSegments = $derived($page.url.pathname.split('/').filter(Boolean).length);
+  const pathSegments = $derived(page.url.pathname.split('/').filter(Boolean).length);
   let previousDepth = 0;
 
   onNavigate((navigation) => {

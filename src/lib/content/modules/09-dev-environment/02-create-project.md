@@ -2,7 +2,7 @@
 
 Now that your tools are installed, it is time to create your first SvelteKit project. This is the moment where theory becomes tangible -- within a few minutes you will have a working application running on your machine, and you will see code changes appear in the browser the instant you save a file.
 
-But we are not just going to run a command and move on. Understanding _what_ the scaffolding tool creates, _why_ each option matters, and _how_ the underlying tools work will save you confusion later when you need to change these decisions -- and you will. I have seen teams waste days debugging build issues that would have been obvious if they understood the toolchain they were using.
+But we are not just going to run a command and move on. Understanding _what_ the scaffolding tool creates, _why_ each option matters, and _how_ the underlying tools work will save you confusion later when you need to change these decisions -- and you will. The scaffolding step is where dozens of architectural choices are made silently on your behalf, and a principal engineer understands every one of them.
 
 ## Svelte vs. SvelteKit -- Understanding the Difference
 
@@ -13,26 +13,27 @@ Before we create anything, let's clarify what you are building. **Svelte** and *
 
 Think of it this way: Svelte is the language for writing components. SvelteKit is the architecture for building applications out of those components. You rarely use Svelte without SvelteKit, just as you rarely write React components without Next.js or a similar framework in professional work.
 
-### What SvelteKit Gives You Over Svelte Alone
-
-If you tried to build a production application with Svelte alone (without SvelteKit), here is what you would need to set up yourself:
-
-| Concern | Without SvelteKit | With SvelteKit |
-|---------|-------------------|----------------|
-| Routing | Install a router library, configure routes manually, handle code splitting yourself | File-based routing with automatic code splitting |
-| Server-side rendering | Set up a Node server, render components manually, handle hydration | Built-in SSR with automatic hydration |
-| Data loading | Write fetch logic in components, handle loading/error states manually, manage client/server data flow | `load` functions with typed data, streaming, and error boundaries |
-| API endpoints | Set up Express/Fastify/Hono, configure CORS, handle serialization | `+server.ts` files with typed request handlers |
-| Static asset handling | Configure a CDN, set up fingerprinting, manage cache headers | Built-in with Vite's asset pipeline |
-| Build and deployment | Configure Rollup/Webpack, write deployment scripts, manage environment variables | Adapters for every platform (Vercel, Cloudflare, Node, static) |
-| Development experience | Configure Vite manually, set up HMR, configure proxies | Zero-config dev server with HMR |
-| SEO and meta tags | Build a `<head>` management system | `<svelte:head>` with SSR support |
-| Form handling | Roll your own form processing, CSRF protection, validation | Form actions with progressive enhancement |
-| Prerendering | Build a static site generator | Per-route prerendering configuration |
-
-SvelteKit does not just save you time -- it saves you from making architectural decisions that are hard to reverse. The routing convention, the data loading pattern, the server/client boundary -- these are decisions the framework has already made well, so you can focus on your application.
-
 There is also a **Svelte library** project type, which is for publishing reusable component packages to npm. Unless you are building a component library for other developers to consume, you want a **SvelteKit app** project. That is what we will create.
+
+### The Architectural Layer Cake
+
+Understanding the relationship between these layers prevents a common source of confusion. Here is the full stack from bottom to top:
+
+```
+  Your Application Code         (your .svelte files, routes, logic)
+  ─────────────────────────
+  SvelteKit                      (routing, SSR, load functions, adapters)
+  ─────────────────────────
+  Svelte Compiler                (compiles .svelte to JS/CSS at build time)
+  ─────────────────────────
+  Vite                           (dev server, HMR, bundling, module resolution)
+  ─────────────────────────
+  Node.js                        (JavaScript runtime, npm, file system access)
+```
+
+Each layer depends on the one below it. SvelteKit cannot function without Vite. Vite cannot function without Node.js. Your application code sits on top of all of them, benefiting from each layer without needing to interact with it directly.
+
+This layering matters when you encounter errors. A "Cannot find module" error is usually a Node.js or npm layer problem. A compilation error about invalid syntax is a Svelte compiler issue. A "404 Not Found" for a route you know exists is typically a SvelteKit routing issue. Knowing which layer produced the error tells you where to look for the fix.
 
 ## Running the Project Generator
 
@@ -42,49 +43,42 @@ Open your terminal, navigate to the folder where you want your projects to live,
 npx sv create my-app
 ```
 
-Let's break this command down piece by piece:
+Let's break this command down:
 
-- **`npx`** -- Runs a package without installing it globally. It downloads the latest version of `sv`, executes it, and cleans up. This ensures you always use the newest scaffolding tool. Under the hood, npx checks your local `node_modules/.bin` first, then your global installs, and only downloads from the registry if neither has it.
+- **`npx`** -- Runs a package without installing it globally. It downloads the latest version of `sv`, executes it, and cleans up. This ensures you always use the newest scaffolding tool.
 - **`sv`** -- The official Svelte CLI. It replaced the older `create-svelte` tool and handles project creation, adding integrations, and more.
 - **`create`** -- Tells `sv` you want to scaffold a new project.
 - **`my-app`** -- The directory name for your project. Choose something meaningful for real projects.
 
-### Alternative Invocations
+### Why `npx` Instead of a Global Install
 
-You do not always need `npx`. If you want to use pnpm or bun:
+You might wonder why we do not install `sv` globally with `npm install -g sv`. There are several architectural reasons:
 
-```bash
-# With pnpm (automatically uses pnpx):
-pnpm create svelte@latest my-app
+**Version pinning.** `npx` always fetches the latest version. A globally installed CLI can become stale -- six months later, you scaffold a project with an outdated tool that generates outdated configuration. This is a subtle trap because the project _works_, but it uses older patterns, older dependency versions, and misses improvements made to the scaffolding tool.
 
-# With bun:
-bunx sv create my-app
+**Zero-maintenance.** A global install needs periodic updating. `npx` is stateless -- no maintenance required.
 
-# Or install sv globally (useful if you create projects often):
-npm install -g sv
-sv create my-app
-```
+**Team consistency.** If every team member uses `npx`, everyone scaffolds with the same version. If some people have global installs at different versions, you get subtly different starting points.
 
-The `sv` CLI also supports non-interactive mode for CI/scripts:
-
-```bash
-# Skip all prompts with flags:
-npx sv create my-app --template minimal --types ts --no-add-ons
-```
+The tradeoff is a few seconds of download time on each run. That cost is negligible compared to the debugging hours saved by always starting from the latest template.
 
 ### Understanding Each Option
 
-The CLI will ask you a series of questions. Here is what each one means, what it does to your project, and why the recommended choices matter:
+The CLI will ask you a series of questions. Here is what each one means and why the recommended choices matter:
 
 **Template: SvelteKit minimal**
 
 You will see options like "SvelteKit minimal", "SvelteKit demo app", and "Svelte library". Choose **SvelteKit minimal**. It gives you a clean starting point -- a single page with no demo content to delete. The demo app includes example routes and styling that look impressive but get in your way when you start building your own thing. The library template is for npm package authors, not application developers.
 
-What each template actually scaffolds:
+```
+# WRONG mental model: "The demo app will teach me patterns"
+# It actually teaches you patterns you will immediately delete.
+# Starting with clutter means your first task is cleanup, not building.
 
-- **SvelteKit minimal** -- One route (`+page.svelte`), `app.html`, configuration files. Clean slate.
-- **SvelteKit demo** -- Multiple routes with a counter, navigation, Sverdle game demo. Educational but creates cleanup work.
-- **Svelte library** -- Configured with `@sveltejs/package` for building and publishing a component library to npm. Includes `src/lib` as the package entry point and a `src/routes` for a documentation site.
+# CORRECT mental model: "Minimal template = maximum control"
+# You add exactly what you need, when you need it.
+# Every file in the project exists because you put it there.
+```
 
 **Type checking: Yes, using TypeScript syntax**
 
@@ -94,86 +88,70 @@ This adds TypeScript support using the `lang="ts"` attribute in your `<script>` 
 <script lang="ts">
   let count: number = $state(0);
   // TypeScript catches errors here at development time
-
-  interface Product {
-    id: string;
-    name: string;
-    price: number;
-  }
-
-  let products: Product[] = $state([]);
 </script>
 ```
 
-The alternative option "Yes, using JSDoc comments" lets you add type annotations in plain JavaScript files using `/** @type {number} */` comments. This works but is verbose, less powerful (no generics syntax, no utility types inline), and most of the Svelte ecosystem's examples and documentation assume TypeScript.
-
 TypeScript is not optional decoration. It is the single biggest productivity multiplier in frontend development. It catches bugs before they reach the browser, enables intelligent autocomplete, and serves as living documentation for your code. Choose TypeScript. Always.
 
-**What TypeScript support actually adds to your project:**
+There is a deeper architectural point here. Svelte 5's runes (`$state`, `$derived`, `$effect`) have first-class TypeScript support. The compiler understands that `$state(0)` returns a `number`, that `$derived(() => count * 2)` infers the return type, and that `$props()` can be typed with an interface. Without TypeScript, you lose all of this -- your editor cannot help you catch prop mismatches, wrong state types, or incorrect derived computations. TypeScript is not just "nice to have" with Svelte 5 -- it is integral to the development experience.
 
-- `tsconfig.json` -- TypeScript compiler configuration
-- `app.d.ts` -- Type declarations for SvelteKit's generated types
-- `lang="ts"` capability in `.svelte` files
-- The `svelte-check` command for project-wide type checking
-- Type inference for `load` function return values, form actions, and route parameters
+**Additional options: Prettier, ESLint, Vitest, Playwright**
 
-**Additional options (add-ons): Prettier, ESLint, Vitest, Playwright**
-
-- **Prettier** -- Adds a `.prettierrc` configuration file, the `prettier-plugin-svelte` package, and a `format` script. Code formatting becomes automatic and consistent. There is no reason not to include this.
-- **ESLint** -- Adds linting rules that catch common mistakes (unused variables, accessibility issues, unreachable code). Includes Svelte-specific rules from `eslint-plugin-svelte` that understand `.svelte` file structure -- for example, it can warn about reactive assignments in wrong contexts, accessibility issues in Svelte template syntax, and unused `$state` variables.
-- **Vitest** -- Adds a unit testing framework configured to work with your project. Vitest is built on Vite (the same build tool SvelteKit uses), so it starts fast and understands your project's import aliases (`$lib`, `$app/*`) out of the box. Even if you are not writing tests yet, having the infrastructure ready removes a barrier when you need it.
-- **Playwright** -- Adds end-to-end testing. Playwright launches a real browser and interacts with your application the way a user would -- clicking buttons, filling forms, navigating pages. It includes a `test` script and a configuration file. This is overkill for a learning project, but essential for production applications.
-
-Additional add-ons you might see:
-
-- **Tailwind CSS** -- Adds Tailwind CSS v4 with the Svelte plugin, `app.css` with Tailwind imports, and PostCSS configuration.
-- **mdsvex** -- Markdown preprocessor for Svelte. Lets you write `.svx` files that combine Markdown with Svelte components. Used for blogs, documentation sites, and content-heavy pages.
-- **Paraglide** -- Internationalization (i18n) library that integrates with SvelteKit's routing for type-safe translations.
+- **Prettier** -- Adds a `.prettierrc` configuration file and a `format` script. Code formatting becomes automatic and consistent. There is no reason not to include this.
+- **ESLint** -- Adds linting rules that catch common mistakes (unused variables, accessibility issues, unreachable code). Includes Svelte-specific rules that understand `.svelte` file structure.
+- **Vitest** -- Adds a unit testing framework. Vitest is built on Vite (the same build tool SvelteKit uses), so it starts fast and understands your project's import aliases out of the box. Even if you are not writing tests yet, having the infrastructure ready removes a barrier when you need it.
+- **Playwright** -- Adds end-to-end testing. Playwright launches a real browser and interacts with your application the way a user would -- clicking buttons, filling forms, navigating pages.
 
 For this course, select **Prettier** and **ESLint** at minimum. Add **Vitest** if you want to write unit tests as you learn.
 
-### How These Tools Form a Quality Pipeline
+### The Quality Pipeline Mental Model
 
-These tools work together to form a multi-layer quality pipeline. Each one catches a different category of mistake, and together they catch almost everything before it reaches a user:
+These tools work together to form a quality pipeline, and understanding their roles prevents the common mistake of thinking they are redundant:
 
 ```
-Your Code
-    │
-    ▼
-┌─────────────────┐
-│    Prettier      │  Layer 1: Formatting (how code looks)
-│  (on save)       │  Tabs, line breaks, quotes, semicolons
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│    ESLint        │  Layer 2: Correctness (whether code follows best practices)
-│  (on save +      │  Unused vars, accessibility, Svelte-specific rules
-│   pre-commit)    │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  TypeScript +    │  Layer 3: Types (whether data flows correctly)
-│  svelte-check    │  Type mismatches, missing props, null safety
-│  (npm run check) │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│    Vitest        │  Layer 4: Unit Tests (whether logic is correct)
-│  (npm run test)  │  Component behavior, utility functions, edge cases
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   Playwright     │  Layer 5: E2E Tests (whether the app works end-to-end)
-│  (npm run test:  │  User flows, form submissions, navigation
-│   integration)   │
-└─────────────────┘
+  Prettier          ESLint            TypeScript          Svelte Check
+  ─────────         ──────            ──────────          ────────────
+  HOW code looks    WHETHER code      WHETHER data        WHETHER Svelte
+  (formatting)      follows rules     flows correctly     templates are
+                    (patterns)        (types)             correct (a11y,
+                                                          bindings, props)
+
+  Runs on save      Runs on commit    Runs on check       Runs on check
+  (instant)         (fast)            (slower)            (slower)
 ```
 
-When you save a file, Prettier formats it. ESLint runs and auto-fixes what it can. When you run `npm run check`, TypeScript and Svelte's type checker analyze your entire project. Each layer catches bugs the previous layers cannot. Prettier cannot tell you a variable is unused. ESLint cannot tell you a function returns `string | null` when you expected `string`. TypeScript cannot tell you the login flow is broken. Together, they create a safety net that lets you move fast with confidence.
+Each tool catches a different category of mistake, and together they catch almost everything before it reaches a user. Prettier handles formatting (how code looks), ESLint handles correctness (whether code follows best practices), TypeScript handles types (whether data flows correctly), and `svelte-check` validates template bindings, accessibility, and prop types.
+
+A common architectural mistake is to rely on only one of these. "We have TypeScript, so we do not need ESLint" misunderstands what each tool does. TypeScript does not catch unused variables, accessibility violations, or code style inconsistencies. ESLint does not catch type errors. Prettier does not catch anything -- it just formats. You need all of them.
+
+### The `sv add` Command for Post-Creation Setup
+
+After creating a project, you can add integrations with `sv add`. This is the preferred way to add tools like Tailwind CSS, Drizzle, Lucia, and others:
+
+```bash
+# Add Tailwind CSS v4 (uses the @theme directive, not tailwind.config.js)
+npx sv add tailwindcss
+
+# Add Drizzle ORM with SQLite
+npx sv add drizzle
+
+# Add Lucia authentication
+npx sv add lucia
+```
+
+The `sv add` command modifies your project files correctly -- it updates `package.json`, adds configuration files, and adjusts `vite.config.ts` or `svelte.config.js` as needed. Manually installing these tools is error-prone because you might miss a configuration step. Let the CLI handle it.
+
+```
+# WRONG: Manually installing Tailwind CSS
+npm install tailwindcss
+# Then manually creating config files, modifying PostCSS config,
+# adding directives to your CSS... easy to miss a step.
+
+# CORRECT: Using sv add
+npx sv add tailwindcss
+# Handles all configuration automatically.
+# Tailwind v4 uses the @theme directive in CSS, not tailwind.config.js.
+```
 
 ## Installing Dependencies
 
@@ -184,46 +162,73 @@ cd my-app
 npm install
 ```
 
-### What Actually Happens During `npm install`
+What actually happens when you run `npm install`:
 
-This seemingly simple command triggers a complex multi-step process:
+1. npm reads `package.json` to find your project's dependencies (Svelte, SvelteKit, Vite, TypeScript, etc.)
+2. It resolves the full dependency tree -- your dependencies have their own dependencies, which have their own dependencies. A typical SvelteKit project has hundreds of transitive packages.
+3. It downloads everything into the `node_modules` directory.
+4. It writes (or updates) `package-lock.json` with the exact resolved versions.
 
-1. **Read `package.json`** -- npm finds your project's declared dependencies. A fresh SvelteKit project has surprisingly few direct dependencies (typically `@sveltejs/adapter-auto`, `@sveltejs/kit`, `@sveltejs/vite-plugin-svelte`, `svelte`, `vite`, and your optional tooling).
+The `node_modules` folder will be large (often 100MB+). This is normal. It is excluded from version control by the `.gitignore` file that `sv create` generated for you. Every developer runs `npm install` to recreate it from the lockfile.
 
-2. **Resolve the dependency tree** -- Each dependency has its own dependencies, which have their own dependencies. npm resolves the entire tree, handling version conflicts along the way. A typical SvelteKit project resolves to 200-400 transitive packages. This is not bloat -- it is the cost of having specialized tools for every task (parsing, transforming, optimizing, serving).
+### The Lockfile: Why It Matters Architecturally
 
-3. **Fetch packages** -- npm downloads tarballs from the npm registry (`registry.npmjs.org`). Packages are cached locally in `~/.npm`, so subsequent installs of the same version are near-instant.
+The `package-lock.json` file deserves special attention because it is frequently misunderstood. Here is the mental model:
 
-4. **Extract and link** -- npm extracts tarballs into `node_modules`, arranging them in a flat structure (hoisting where possible to reduce duplication).
+- `package.json` says **what you want**: `"svelte": "^5.0.0"` means "any version from 5.0.0 up to (but not including) 6.0.0."
+- `package-lock.json` says **what you got**: the exact version (e.g., `5.2.7`) that was resolved when someone last ran `npm install`.
 
-5. **Run lifecycle scripts** -- Some packages define `postinstall` scripts that run after extraction. For example, `@sveltejs/kit` runs `svelte-kit sync` to generate type definitions.
+```
+# WRONG: "The lockfile is auto-generated noise, I will .gitignore it"
+# Result: Every developer and CI server gets different dependency versions.
+# Builds that work on your machine fail in production. Subtle bugs appear
+# only in certain environments. This is a real production incident waiting to happen.
 
-6. **Write the lockfile** -- npm writes (or updates) `package-lock.json` with the exact resolved versions, URLs, and integrity hashes.
+# CORRECT: "The lockfile is a reproducibility guarantee"
+# Commit it. Every environment installs identical versions.
+# Updates happen explicitly with `npm update`, not implicitly.
+```
 
-The `node_modules` folder will be large (often 100-200MB). This is normal. It is excluded from version control by the `.gitignore` file that `sv create` generated for you. Every developer runs `npm install` to recreate it from the lockfile.
+**Always commit `package-lock.json` to version control.** It guarantees that every developer, CI server, and production deployment uses the exact same dependency tree. Without it, `npm install` might resolve to different versions on different machines, creating the worst kind of bugs: ones that only appear in specific environments.
 
-### Understanding `devDependencies` vs `dependencies`
+### Dependencies vs DevDependencies
 
-Look at your `package.json` after scaffolding:
+The `package.json` splits dependencies into two sections:
 
 ```json
 {
+  "dependencies": {
+    // Shipped to production -- runtime code
+  },
   "devDependencies": {
-    "@sveltejs/adapter-auto": "^4.0.0",
     "@sveltejs/kit": "^2.0.0",
-    "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "svelte": "^5.0.0",
-    "typescript": "^5.0.0",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "typescript": "^5.0.0"
+    // Only needed during development and build
   }
 }
 ```
 
-Notice: everything is a `devDependency`. This seems counterintuitive -- surely Svelte is needed at runtime? But remember: Svelte is a _compiler_. At build time, it transforms your `.svelte` files into plain JavaScript. The built output does not import from `svelte` at runtime (with a few exceptions for runtime helpers that are inlined). SvelteKit itself is also a build-time tool -- the adapter produces a standalone server or static files that run without SvelteKit installed.
+You might notice that Svelte, SvelteKit, and even Vite are listed as `devDependencies`. This is correct and intentional. Because Svelte compiles your components at build time, the Svelte runtime is not shipped to the browser as a dependency -- it is consumed during the build process. The compiled output is vanilla JavaScript that has no dependency on Svelte at all. This is fundamentally different from React, where the React runtime ships to every user's browser.
 
-This is different from frameworks like React, where `react` and `react-dom` are `dependencies` because the React runtime must be present when the application runs. Svelte's compiler approach means your production bundle is smaller and your deployment is simpler.
+### Understanding Semantic Versioning
 
-If you add server-side libraries (a database driver, an email service), those go in `dependencies` because they are needed when the server runs in production.
+The version numbers in `package.json` follow **semantic versioning (semver)**, and the prefix characters control how npm resolves updates:
+
+```
+"svelte": "^5.2.7"
+           │ │ │ └── Patch: bug fixes only (safe to update)
+           │ │ └──── Minor: new features, backwards compatible (safe to update)
+           │ └────── Major: breaking changes (NOT safe to auto-update)
+           └──────── ^ means "compatible with": allows minor and patch updates
+
+"svelte": "~5.2.7"   # ~ means patch updates only (5.2.x)
+"svelte": "5.2.7"    # Exact version, no updates
+"svelte": ">=5.0.0"  # Any version 5.0.0 or higher (risky!)
+```
+
+The `^` prefix is the default and the most common. It says "I trust this package not to break things in minor releases." The lockfile then pins the exact version so you control when updates happen.
 
 ## Starting the Dev Server
 
@@ -242,186 +247,82 @@ You should see output like this:
   ➜  Network: use --host to expose
 ```
 
-### What Just Happened -- The Full Chain
+Here is what just happened behind the scenes:
 
-Here is the complete chain of events, from your terminal command to pixels on screen:
+1. npm looked up the `dev` script in `package.json` and found `"vite dev"`.
+2. **Vite** started -- Vite is the build tool and development server that SvelteKit uses under the hood. It is extremely fast because it serves your source files directly using native ES modules instead of bundling everything up front.
+3. Vite loaded the **SvelteKit Vite plugin**, which knows how to compile `.svelte` files and implement file-based routing.
+4. A local HTTP server started on port 5173.
+5. A **WebSocket connection** was established between the server and the browser for Hot Module Replacement.
 
-1. **npm looks up the `dev` script** in `package.json` and finds `"vite dev"`.
-2. **Vite starts** -- Vite is the build tool and development server that SvelteKit uses under the hood.
-3. **Vite loads plugins** -- It reads `vite.config.ts` and initializes the `sveltekit()` plugin, which registers the Svelte compiler as a Vite transform.
-4. **SvelteKit generates types** -- The SvelteKit plugin runs `svelte-kit sync`, generating TypeScript declarations in `.svelte-kit/types/` for your routes, params, and load functions.
-5. **An HTTP server starts** on port 5173 -- This is not a traditional server that reads static files. It is a "transform-on-demand" server that compiles files the moment the browser requests them.
-6. **A WebSocket server starts** alongside the HTTP server for Hot Module Replacement.
-7. **The server is ready** -- Vite prints the URL and waits for requests.
+Open `http://localhost:5173` in your browser. You will see the SvelteKit welcome page.
 
-When you open `http://localhost:5173` in your browser:
+### Why Port 5173?
 
-8. The browser requests `/`. Vite intercepts this and serves `src/app.html` with injected script tags.
-9. The browser's JavaScript fetches your root layout and page components. Vite compiles them _on demand_ -- your `.svelte` file is transformed to JavaScript only when the browser asks for it.
-10. The compiled JavaScript runs in the browser, mounting your Svelte components to the DOM.
+Port 5173 is Vite's default. The number is not arbitrary -- in "leet speak," 5173 loosely spells "SITE." If port 5173 is occupied, Vite automatically increments to 5174, 5175, and so on. You can set a specific port in `vite.config.ts`:
 
-## Vite -- The Build Engine Under SvelteKit
-
-Vite deserves its own section because understanding why it is fast changes how you think about modern development. Vite (French for "quick," created by Evan You, who also created Vue.js) is fundamentally different from older bundlers like Webpack.
-
-### Why Vite Is Fast -- The Architecture
-
-Traditional bundlers (Webpack, Parcel) follow a **bundle-first** approach:
-
-1. Start from the entry point
-2. Crawl the entire import graph
-3. Bundle everything into one or more output files
-4. Serve the bundle to the browser
-
-For a large project, step 2-3 can take 10-30 seconds on cold start. Every file in your project is read, parsed, and bundled before you see anything.
-
-Vite follows a **serve-first** approach in development:
-
-1. Start the server immediately (no bundling)
-2. When the browser requests a file, transform it on demand
-3. Serve the transformed file as a native ES module
-4. Let the browser resolve imports by making additional requests
-
-```
-Traditional Bundler (Webpack):
-  Source Files → [Bundle Everything] → Single Bundle → Browser
-  Cold start: 10-30 seconds
-
-Vite:
-  Browser request → [Transform single file] → ES Module → Browser
-  Cold start: < 1 second
+```ts
+export default defineConfig({
+  plugins: [sveltekit()],
+  server: {
+    port: 3000 // Use a fixed port if you prefer
+  }
+});
 ```
 
-This works because modern browsers natively support ES modules (`import`/`export`). Instead of bundling hundreds of files into one, Vite serves each file individually and lets the browser's module system handle the dependency graph. The browser makes more HTTP/2 requests, but each one is tiny and fast.
-
-### The Two Engines Inside Vite
-
-Vite uses two different tools for different purposes, and understanding why helps when you encounter performance issues:
-
-**esbuild (development):**
-- Written in Go, compiled to native code -- 10-100x faster than JavaScript-based tools
-- Handles TypeScript transpilation, JSX transformation, and CSS modules
-- Does NOT do type checking (that is TypeScript's job via `svelte-check`)
-- Used for dependency pre-bundling: Vite scans your `node_modules` and pre-bundles large libraries (like Svelte's runtime helpers) into single files to reduce HTTP requests
-
-**Rollup (production build):**
-- The production bundler, written in JavaScript
-- More configurable than esbuild, better tree-shaking, more mature plugin ecosystem
-- Produces highly optimized output: code splitting, minification, asset fingerprinting
-- Slower than esbuild, but production builds happen once, not on every save
-
-```
-Development:
-  .svelte → Svelte compiler → JS → esbuild → ES Module → Browser
-  Speed: milliseconds per file
-
-Production (npm run build):
-  .svelte → Svelte compiler → JS → Rollup → Optimized bundles
-  Speed: seconds for entire project
-```
-
-### Dependency Pre-Bundling
-
-When you first run `npm run dev`, Vite scans your imports and pre-bundles your `node_modules` dependencies. This is necessary because many npm packages are published as CommonJS (`require`/`module.exports`), not ES modules, and browsers cannot import CommonJS. Vite uses esbuild to convert everything to ESM and combine many small files into fewer ones.
-
-You will see this in your terminal on first run:
-
-```
-Optimizing dependencies:
-  svelte, @sveltejs/kit, ...
-```
-
-The results are cached in `node_modules/.vite`. Subsequent starts skip this step. If you ever see stale behavior after installing a new package, you can force re-optimization:
-
-```bash
-# Delete the Vite cache and restart:
-rm -rf node_modules/.vite
-npm run dev
-```
+For production, you would never use Vite's dev server. The production server is whatever your adapter targets -- Node.js, Vercel, Cloudflare Workers, or a static file server.
 
 ## Hot Module Replacement: Why Development Feels Instant
 
-When you edit a `.svelte` file and save it, the browser updates within milliseconds -- without a full page refresh. This is **Hot Module Replacement (HMR)**, and understanding how it works at a technical level helps you debug the rare cases where it does not behave as expected.
+When you edit a `.svelte` file and save it, the browser updates within milliseconds -- without a full page refresh. This is **Hot Module Replacement (HMR)**, and understanding how it works helps you appreciate why modern development feels so different from the "edit, rebuild, refresh" cycle of older tools.
 
-### The HMR Protocol
-
-Here is the complete flow:
-
-1. **File system event** -- You save a file. The OS notifies Vite via `fs.watch` (or `chokidar` on platforms where native watching is unreliable).
-
-2. **Module graph invalidation** -- Vite maintains an in-memory graph of every module and its dependencies. When a file changes, Vite walks the graph upward to find the "HMR boundary" -- the nearest module that knows how to accept updates. For Svelte components, the Svelte plugin registers each component as its own HMR boundary.
-
-3. **Recompilation** -- Vite recompiles _only the changed file_. The Svelte compiler transforms the `.svelte` file into JavaScript, and esbuild handles any TypeScript. This typically takes 5-50ms.
-
-4. **WebSocket notification** -- Vite sends a message over the WebSocket connection to the browser: "Module `/src/routes/+page.svelte` has changed. Here is the new code."
-
-5. **Hot swap** -- The browser's HMR runtime replaces the old module with the new one. For Svelte components, this means:
-   - The component's template and reactive declarations are updated
-   - `$state` values are **preserved** (the old state is migrated to the new component instance)
-   - `$effect` callbacks are re-run with the new dependencies
-   - CSS changes are applied by replacing the `<style>` tag
-
-6. **DOM update** -- Svelte's reactivity system reconciles the DOM with the new template. Only the changed parts of the DOM are touched.
-
-### Module Graph Invalidation -- The Key Concept
-
-The module graph is what makes HMR surgical rather than brute-force. Consider this dependency chain:
+Here is the flow:
 
 ```
-+page.svelte → imports Header.svelte → imports Logo.svelte
-                                      → imports NavLinks.svelte
+  1. You save a file
+  2. OS file watcher notifies Vite (< 1ms)
+  3. Vite recompiles ONLY the changed file (< 50ms for a typical component)
+  4. Vite sends the new module over WebSocket to the browser
+  5. Browser replaces the old module in-place, preserving state
+  6. Svelte re-renders only the affected parts of the DOM
+
+  Total time: typically 30-100ms from save to visible update
 ```
 
-If you edit `Logo.svelte`, Vite does not recompile `Header.svelte` or `+page.svelte`. It recompiles only `Logo.svelte`, sends the update to the browser, and the browser replaces just that module. The key is that `Logo.svelte` is an HMR boundary -- it can accept its own updates without requiring its parent to update.
+That last point is critical. If you have a counter at 5 and you change the button's color, the counter stays at 5. The page does not reload. Your form inputs are not cleared. Your scroll position is preserved. HMR makes the feedback loop between writing code and seeing results nearly instantaneous, which fundamentally changes how you develop.
 
-But if you change a utility function that is imported by multiple components:
+### Why HMR Changes How You Think About Development
+
+To appreciate why this matters, consider the alternative. Without HMR, every change requires a full page reload: the browser discards all JavaScript state, re-fetches the page, re-parses the HTML, and re-executes all your scripts. If you were filling out a multi-step form and tweaking the third step's styling, you would have to click through steps one and two after every single save.
+
+With HMR, you stay exactly where you are. The cost of experimenting drops to near zero, which encourages you to experiment more -- and experimenting more is how you learn faster.
+
+This has a deeper architectural implication: HMR enables a "design in the browser" workflow. Instead of meticulously planning every CSS value in a design tool and then translating it to code, you can adjust values live and see the result instantly. This tight feedback loop produces better results because you are making decisions in the actual medium (the browser) rather than in a simulation (a design tool).
+
+### When HMR Breaks (and Why)
+
+HMR is not magic, and knowing its limitations saves debugging time:
 
 ```
-utils/format.ts → imported by ProductCard.svelte
-                → imported by CartSummary.svelte
-                → imported by OrderHistory.svelte
+# HMR works perfectly for:
+- Template changes (HTML in .svelte files)
+- Style changes (CSS in .svelte files)
+- Reactive state updates (changes to $state, $derived logic)
+- Component prop changes
+
+# HMR may require a full reload for:
+- Changes to module-level side effects (top-level code that runs on import)
+- Changes to route structure (adding/renaming +page.svelte files)
+- Changes to configuration files (svelte.config.js, vite.config.ts)
+- Changes to hooks (hooks.server.ts)
+
+# HMR will lose state when:
+- You change a component's exported props ($props) signature
+- You modify $effect cleanup functions (effects are torn down and recreated)
+- A parent component re-mounts due to structural changes
 ```
 
-Vite invalidates all three components and sends updates for each one. This is still fast (three compilations instead of one), but it shows why keeping utility files small and focused can improve HMR performance in large projects.
-
-### When HMR Fails -- Full Reload Triggers
-
-HMR is not magic. Certain changes force a full page reload:
-
-- **Editing `app.html`** -- This is the HTML shell; there is no way to hot-replace it.
-- **Changing `svelte.config.js` or `vite.config.ts`** -- Configuration changes require a server restart.
-- **Modifying a module that is not an HMR boundary** -- If a changed module is imported at the top level of a non-component file and no ancestor is an HMR boundary, Vite falls back to a full reload.
-- **Syntax errors** -- If your file has a syntax error, the HMR update fails and Vite shows an error overlay. Fix the error and save again -- it recovers automatically.
-
-### State Preservation -- What Is Kept and What Is Not
-
-HMR preserves `$state` values, but not everything:
-
-| Preserved | Not Preserved |
-|-----------|---------------|
-| `$state` variable values | `$effect` side effects (re-run) |
-| Form input values | `onMount` callbacks (re-run) |
-| Scroll position | `setTimeout`/`setInterval` (old ones leak if not cleaned up) |
-| Component tree structure | URL/route state (same URL, so usually fine) |
-
-This means if you have a `$effect` that sets up a WebSocket connection, HMR will establish a _new_ connection without closing the old one. This is why cleanup in `$effect` is important:
-
-```svelte
-<script lang="ts">
-  // WRONG: Leaks connections during HMR
-  $effect(() => {
-    const ws = new WebSocket('wss://api.example.com');
-    ws.onmessage = (e) => console.log(e.data);
-  });
-
-  // CORRECT: Cleanup function closes the old connection
-  $effect(() => {
-    const ws = new WebSocket('wss://api.example.com');
-    ws.onmessage = (e) => console.log(e.data);
-    return () => ws.close();
-  });
-</script>
-```
+When HMR fails gracefully, Vite falls back to a full page reload. You will see a "page reload" message in the terminal. This is not an error -- it is Vite saying "I cannot safely hot-swap this change, so I am doing a clean reload instead."
 
 ## Your First Modification
 
@@ -456,65 +357,106 @@ Now try something more interesting. Add a reactive variable:
 
 Save, click the button a few times to increment the counter, then change the heading text again and save. Notice: the heading updates, but the counter value is preserved. HMR replaced the template without resetting your component state.
 
-### Going Further -- Understanding the Compiled Output
+### Going Deeper: Derived State and Effects
 
-To see what Svelte does with your component, open your browser's DevTools, go to the Network tab, and filter by JS. Find the request for `+page.svelte`. The response is not your original Svelte code -- it is compiled JavaScript that looks something like:
+Now extend the example to see how Svelte 5's reactivity model works with HMR:
 
-```javascript
-// Simplified view of compiled output
-import { $state } from 'svelte/internal';
-
-export default function Page($$anchor) {
+```svelte
+<script lang="ts">
   let count = $state(0);
+  let doubled = $derived(count * 2);
 
-  // Template rendering code...
-  // DOM creation and update code...
-  // Event listener for the button click...
-}
+  $effect(() => {
+    console.log(`Count changed to ${count}, doubled is ${doubled}`);
+  });
+</script>
+
+<h1>Hello, SvelteKit!</h1>
+<button onclick={() => count++}>
+  Clicked {count} times (doubled: {doubled})
+</button>
 ```
 
-The Svelte compiler has transformed your declarative template into imperative DOM operations. There is no virtual DOM diffing, no runtime template parsing. The compiler generates the minimal code needed to create and update exactly the DOM nodes your template describes. This is why Svelte applications are small and fast -- the compiler does the work at build time so the browser does not have to at runtime.
+Click the button a few times. Open the browser console -- you will see the effect logging each change. Now modify the `$derived` computation to `count * 3` and save. The `doubled` value updates (it is now tripled), but `count` retains its value. The `$effect` tears down and recreates with the new dependency, logging the current state.
 
-## Production Build -- How It Differs from Development
+This is the power of the runes system combined with HMR -- your reactive graph updates surgically without losing state.
 
-Development and production are fundamentally different modes:
+## Understanding the Build Pipeline
+
+When you eventually run `npm run build` for production, an entirely different pipeline kicks in:
+
+```
+  npm run build
+  ─────────────
+  1. Vite resolves all imports and builds a dependency graph
+  2. Svelte compiler converts .svelte files to optimized JS + CSS
+  3. Vite bundles, tree-shakes, and code-splits the output
+  4. CSS is extracted, minified, and fingerprinted
+  5. The SvelteKit adapter packages everything for your target platform
+  6. Output goes to .svelte-kit/output/ and then to build/ (or similar)
+
+  Dev server:    serves source files, compiles on demand, no optimization
+  Build:         compiles everything up front, fully optimized for production
+```
+
+The build output is dramatically smaller than your source code. A typical SvelteKit app compiles to a few hundred kilobytes of JavaScript -- compared to React apps that start at 40KB just for the framework runtime. This is because Svelte compiles away -- the framework does not exist at runtime.
+
+## Environment Variables: Development vs Production
+
+SvelteKit uses Vite's environment variable system. Variables prefixed with `PUBLIC_` are available in client-side code. All other variables are server-only:
 
 ```bash
-# Development (what you have been using):
-npm run dev     # Vite dev server, no bundling, HMR
-
-# Production build:
-npm run build   # Rollup bundles, optimizes, and outputs to /build
-
-# Preview the production build locally:
-npm run preview # Serves the built output on localhost:4173
+# .env (local development -- never commit this file)
+DATABASE_URL=sqlite:local.db
+SECRET_KEY=dev-secret-do-not-use-in-prod
+PUBLIC_APP_NAME=My App
 ```
 
-### What `npm run build` Does
+```typescript
+// Server-side code (+page.server.ts, hooks.server.ts)
+import { DATABASE_URL, SECRET_KEY } from '$env/static/private';
 
-1. **SvelteKit analyzes your routes** -- It discovers all pages, layouts, load functions, and API endpoints.
-2. **Svelte compiler runs on every `.svelte` file** -- Components are compiled to optimized JavaScript with no development-mode warnings.
-3. **Rollup bundles the output** -- Code splitting is applied automatically: each route gets its own chunk, shared code is extracted into common chunks.
-4. **CSS is extracted and minified** -- Component styles are combined, deduplicated, and minified into separate CSS files.
-5. **Assets are fingerprinted** -- File names get content hashes (e.g., `app-a1b2c3.js`) for aggressive cache headers.
-6. **The adapter packages everything** -- `adapter-auto` detects your platform and produces the appropriate output format.
-7. **Prerendering runs** -- Any pages marked for prerendering are rendered to static HTML at build time.
-
-The output goes to `.svelte-kit/output` (intermediate) and then to `build/` (final, adapter-specific). The production build is typically 50-200KB of JavaScript for a medium-sized application, compared to the megabytes of unoptimized modules served in development.
-
-### Preview Before You Deploy
-
-Always run `npm run preview` before deploying:
-
-```bash
-npm run build && npm run preview
+// Client-side code (anywhere, including .svelte files)
+import { PUBLIC_APP_NAME } from '$env/static/public';
 ```
 
-Preview serves the production build locally on port 4173. This catches issues that only appear in production mode:
-- Missing environment variables (dev might use defaults)
-- Broken imports (dev is more lenient about module resolution)
-- SSR errors (components that reference `window` or `document` without guards)
-- Bundle size surprises (check the Network tab)
+```
+# WRONG: Putting secrets in PUBLIC_ variables
+PUBLIC_DATABASE_URL=sqlite:local.db
+# This ships your database URL to every user's browser!
+
+# WRONG: Trying to access private variables in client code
+import { SECRET_KEY } from '$env/static/private';
+# SvelteKit build error: cannot import private env in client code
+
+# CORRECT: Private vars for server, PUBLIC_ vars for client
+# SvelteKit enforces this boundary at compile time
+```
+
+SvelteKit also provides `$env/dynamic/private` and `$env/dynamic/public` for variables that are read at runtime instead of baked in at build time. Use static imports when the value is known at build time (most cases) and dynamic imports when the value varies per deployment (e.g., environment-specific configuration in a containerized setup).
+
+### The `.env` File Hierarchy
+
+SvelteKit loads environment variables from multiple files, with a specific precedence order:
+
+```
+.env                  # Always loaded (base defaults)
+.env.local            # Always loaded, higher priority (local overrides)
+.env.[mode]           # Loaded for specific mode (.env.development, .env.production)
+.env.[mode].local     # Mode-specific local overrides (highest priority)
+```
+
+```
+# WRONG: Committing .env with real secrets
+# Anyone with access to your repo can read your database password.
+
+# CORRECT: Commit .env with safe defaults, use .env.local for secrets
+# .env          → DATABASE_URL=sqlite:local.db (safe default)
+# .env.local    → DATABASE_URL=postgres://prod:secret@host/db (gitignored)
+# .env.production → PUBLIC_API_URL=https://api.myapp.com
+```
+
+The `.local` files are automatically gitignored by `sv create`. This is the correct pattern: commit safe defaults, override locally with secrets.
 
 ## Common Issues and How to Fix Them
 
@@ -524,15 +466,16 @@ This means another process (probably a previous dev server you forgot to stop) i
 
 ```bash
 npm run dev -- --port 3000
+```
 
-# Or find and kill the process using the port:
-# macOS/Linux:
+To find and kill the existing process:
+
+```bash
+# macOS/Linux: find what is using port 5173
 lsof -i :5173
-kill -9 <PID>
 
-# Windows PowerShell:
-netstat -ano | findstr :5173
-taskkill /PID <PID> /F
+# Then kill the process
+kill -9 <PID>
 ```
 
 ### `command not found: node` after installation
@@ -543,6 +486,17 @@ Your terminal does not know where Node.js is installed. Close and reopen your te
 
 If you see `EACCES` errors when installing global packages, do not use `sudo npm install`. Instead, configure npm to use a different directory for global installs, or switch to a version manager like fnm which installs Node.js in your home directory where permissions are not an issue.
 
+```
+# WRONG: Using sudo to fix permission errors
+sudo npm install -g something
+# This installs packages as root, creating a mess of ownership issues
+# that will haunt you across every future npm operation.
+
+# CORRECT: Use a version manager (fnm, nvm)
+# These install Node.js in your home directory where you have full permissions.
+# No sudo needed, ever.
+```
+
 ### `Cannot find module` or resolution errors
 
 This usually means `npm install` was not run, or it failed partway through. Delete the `node_modules` folder and the lockfile, then reinstall:
@@ -552,65 +506,129 @@ rm -rf node_modules package-lock.json
 npm install
 ```
 
-If the error mentions a `.svelte-kit` path, regenerate the types:
-
-```bash
-npx svelte-kit sync
-```
-
 ### Node version mismatch warnings
 
 SvelteKit requires Node.js 18.13 or later. If you see version warnings, upgrade Node.js. If you are using a version manager, run `fnm install 22` or `nvm install 22` and switch to it.
 
-### TypeScript errors in fresh project
+### TypeScript errors on fresh project
 
-If `npm run check` shows errors in a brand-new project, ensure you ran `npm install` completely and that `svelte-kit sync` has been executed (it runs automatically during install, but network issues can interrupt it):
+If you see TypeScript errors immediately after scaffolding, run the sync command to generate SvelteKit's type definitions:
 
 ```bash
 npx svelte-kit sync
-npm run check
 ```
 
-### HMR stops working or gets stuck
+This generates the `$types`, `$app/state`, `$env`, and other module declarations that TypeScript needs to understand SvelteKit's runtime imports. The sync runs automatically during `dev` and `build`, but if you open the project in your editor before running the dev server, TypeScript may complain until you sync manually.
 
-Occasionally the HMR connection drops (especially on unstable networks or after laptop sleep). Symptoms: changes are not reflected, or you see a "connection lost" overlay. Fixes:
+### The `.svelte-kit` Directory
 
-1. Hard refresh the browser (`Ctrl+Shift+R` / `Cmd+Shift+R`)
-2. If that does not work, restart the dev server (`Ctrl+C`, then `npm run dev`)
-3. If problems persist, clear the Vite cache: `rm -rf node_modules/.vite && npm run dev`
+You will notice a `.svelte-kit` directory appears after running `dev` or `build`. This is SvelteKit's internal output directory containing generated types, the built application, and internal configuration. It is listed in `.gitignore` and should never be committed. If things get into a strange state, deleting `.svelte-kit` and restarting the dev server is a safe reset:
 
-### Slow dev server startup
+```bash
+rm -rf .svelte-kit
+npm run dev
+```
 
-If the dev server takes more than a few seconds to start:
+### Vite Dependency Pre-Bundling Issues
 
-1. **Too many files in `node_modules`** -- Consider switching to pnpm
-2. **File system watcher limits (Linux)** -- Increase the inotify limit:
-   ```bash
-   echo fs.inotify.max_user_watches=524288 | sudo tee -a /etc/sysctl.conf && sudo sysctl -p
-   ```
-3. **Antivirus scanning** -- Exclude your project directory and `node_modules` from real-time scanning
-4. **Network drives** -- Vite's file watcher does not work reliably on network-mounted directories. Clone your project to a local drive.
+Occasionally, Vite's dependency optimizer gets confused -- especially after installing new packages. If you see strange import errors after `npm install`, force Vite to re-optimize:
+
+```bash
+# Delete the Vite cache and restart
+rm -rf node_modules/.vite
+npm run dev
+```
+
+Vite pre-bundles your `node_modules` dependencies on first startup for performance. When you add or update packages, the cache can become stale. Deleting it forces a fresh optimization pass.
+
+## Project Naming and Organization Conventions
+
+For real projects, a few naming conventions matter:
+
+```bash
+# Use kebab-case for project directories
+npx sv create my-awesome-app     # Good
+npx sv create myAwesomeApp       # Works, but unconventional
+npx sv create My Awesome App     # Broken -- spaces in path names cause problems
+
+# For a monorepo with multiple apps
+my-company/
+├── apps/
+│   ├── web/                     # SvelteKit app
+│   └── docs/                    # Documentation site
+├── packages/
+│   ├── ui/                      # Shared component library
+│   └── utils/                   # Shared utilities
+└── package.json                 # Workspace root
+```
+
+If you are starting a professional project, consider your directory structure from day one. Moving a project later means updating CI/CD pipelines, deployment configurations, documentation links, and team muscle memory. It is much cheaper to get it right at creation time.
+
+## Git Initialization and First Commit
+
+The `sv create` command initializes a Git repository and creates a `.gitignore` for you. Understanding what is excluded matters:
+
+```bash
+# .gitignore (generated by sv create)
+.DS_Store
+node_modules         # Recreated by npm install
+/build               # Production build output
+/.svelte-kit         # Generated types and internal files
+.env                 # Environment variables (may contain secrets)
+.env.*               # Environment-specific overrides
+!.env.example        # Exception: commit the example file
+vite.config.js.timestamp-*  # Vite temp files
+```
+
+Your first commit should happen immediately after creation, before you start modifying files. This gives you a clean baseline to diff against:
+
+```bash
+cd my-app
+npm install
+git add -A
+git commit -m "Initial SvelteKit project scaffold"
+```
+
+```
+# WRONG: Making changes before your first commit
+# You lose the ability to see what the scaffolding tool generated
+# versus what you modified. Debugging "why does my project differ
+# from the default?" becomes impossible.
+
+# CORRECT: Commit immediately, then start modifying
+# git diff shows exactly what you changed from the baseline.
+# If something breaks, you can compare against the clean scaffold.
+```
 
 ## Try It
 
-Create a new SvelteKit project using the steps above. Choose the minimal template, TypeScript, Prettier, and ESLint. Start the dev server and open the welcome page in your browser.
+Create a new SvelteKit project using the steps above. Select TypeScript, Prettier, and ESLint. Start the dev server and open the welcome page in your browser.
 
-Then open `src/routes/+page.svelte`, add a counter with `$state`, and watch the browser update as you save. Click the button a few times, then edit the heading text and save again -- confirm that the counter value is preserved. This is the development experience you will have for the rest of the course.
+Then open `src/routes/+page.svelte` and build a small interactive component:
 
-Next, run `npm run build` followed by `npm run preview`. Open `http://localhost:4173` and confirm your application works in production mode. Open DevTools, go to the Network tab, and look at the JavaScript files being loaded -- notice the content hashes in the filenames and the much smaller file sizes compared to development mode.
+1. Add a `count` variable using `$state(0)`
+2. Add a `doubled` value using `$derived(count * 2)`
+3. Add an `$effect` that logs the count to the console
+4. Create a button that increments the count
+5. Display both `count` and `doubled` in the template
 
-Finally, open the browser DevTools Network tab while in dev mode. Save a file and watch the WebSocket messages in the WS tab. You will see the HMR update protocol in action -- the server sending module update notifications and the client requesting the new code.
+Click the button a few times, then edit the heading text and save again -- confirm that the counter value is preserved while the heading updates. Open the browser console and verify that the effect logs on each click. This is the development experience you will have for the rest of the course.
+
+Then try adding a `.env` file with `PUBLIC_APP_NAME=My First App` and display it in your component using `import { PUBLIC_APP_NAME } from '$env/static/public'`. Restart the dev server (env changes require a restart) and verify that the value appears in the browser.
 
 ## Key Takeaways
 
 - **`npx sv create my-app`** scaffolds a new SvelteKit project -- always choose the **SvelteKit minimal** template for a clean start
-- **SvelteKit** builds on Svelte by adding routing, SSR, API routes, data loading, form actions, and deployment adapters -- it is the application framework, not just the component compiler
-- Always select **TypeScript**, **Prettier**, and **ESLint** -- these form a multi-layer quality pipeline where each tool catches a different category of bugs
-- **`npm install`** resolves the full dependency tree (200-400 transitive packages), verifies integrity hashes, and writes exact versions to the lockfile for reproducibility
-- SvelteKit dependencies are all `devDependencies` because Svelte is a compiler -- the production output does not import the framework at runtime
-- **Vite** powers the dev server using a **serve-first** architecture -- it serves files as native ES modules instead of bundling, which is why startup is nearly instant
-- Vite uses **esbuild** (native Go binary) for fast development transforms and **Rollup** for optimized production bundles
-- **Hot Module Replacement** uses WebSocket to push updated modules to the browser, Svelte's HMR support preserves `$state` values across updates, and the module graph determines which files need recompilation
-- HMR preserves component state but re-runs effects -- always provide cleanup functions in `$effect` to prevent resource leaks during development
-- **`npm run build`** produces optimized output with code splitting, CSS extraction, asset fingerprinting, and adapter-specific packaging -- always test with `npm run preview` before deploying
-- When something goes wrong, check the common issues list -- port conflicts, missing installs, stale caches, and version mismatches account for the vast majority of setup problems
+- **SvelteKit** builds on Svelte by adding routing, SSR, API routes, and deployment adapters -- it is the application framework, not just the component compiler
+- The **layer cake** (Node.js, Vite, Svelte Compiler, SvelteKit, Your Code) helps you diagnose which layer produced an error
+- Always select **TypeScript**, **Prettier**, and **ESLint** -- these form a quality pipeline where each tool catches a different category of mistake
+- Use **`npx`** instead of global installs to guarantee you always scaffold with the latest tool version
+- **`npm install`** resolves the full dependency tree and writes exact versions to the lockfile -- **always commit the lockfile** for reproducibility
+- Svelte and SvelteKit are **devDependencies** because the compiler runs at build time -- no Svelte runtime ships to the browser
+- **Vite** powers the dev server -- it serves source files directly using native ES modules, which is why startup is nearly instant
+- **Hot Module Replacement** pushes updated modules to the browser over WebSocket without a full page refresh, preserving component state -- know when it works, when it falls back, and when it loses state
+- **Environment variables** use the `PUBLIC_` prefix convention -- SvelteKit enforces the server/client boundary at compile time
+- Use **`sv add`** to add integrations like Tailwind CSS, Drizzle, and Lucia -- the CLI handles configuration that is error-prone to do manually
+- When something goes wrong, check the common issues list before searching -- port conflicts, missing installs, and version mismatches account for the vast majority of setup problems
+- The `.svelte-kit` directory is generated output -- delete it as a safe reset when things get into a strange state
+- **Commit immediately** after scaffolding to preserve a clean baseline for diffing

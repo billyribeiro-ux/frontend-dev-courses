@@ -4,7 +4,75 @@ You have already seen how `setContext` and `getContext` pass data down the compo
 
 Context is scoped to a component tree. A value set in a parent is available to every descendant in that branch, but invisible to components outside it. This tree-scoping is what makes context fundamentally different from global state in a `.svelte.ts` file. Two instances of the same component can provide different context values to their respective subtrees without interfering with each other.
 
-## setContext and getContext
+This lesson goes beyond the basics. We will explore context composition with snippets, understand the compiler's role in context scoping, examine patterns that most tutorials never cover, and build a production-quality form system to demonstrate advanced usage. Understanding _why_ the distinction between context and global state matters, and _when_ each approach is correct, is what separates a developer who uses context from one who wields it.
+
+## Why Context Exists -- The Problem It Solves
+
+Consider a dashboard application with a theme, an authenticated user, and feature flags. Without context, you must thread these values through every level of the component tree:
+
+```svelte
+<!-- WRONG: Prop drilling through 6 levels -->
+<Dashboard {user} {theme} {featureFlags}>
+  <Sidebar {user} {theme} {featureFlags}>
+    <Navigation {user} {theme}>
+      <NavItem {theme}>
+        <Icon {theme} />  <!-- Icon needs theme but nothing else -->
+      </NavItem>
+    </Navigation>
+  </Sidebar>
+</Dashboard>
+```
+
+Every intermediate component (`Sidebar`, `Navigation`, `NavItem`) must declare, accept, and forward props it does not use. This creates three problems:
+
+1. **Coupling** -- Intermediate components know about data they do not use. Changing the `theme` type requires editing every component in the chain.
+2. **Noise** -- Props lists become cluttered with pass-through values, obscuring the props a component actually consumes.
+3. **Fragility** -- Adding a new piece of shared data requires modifying every component between the provider and the consumer.
+
+Context solves this by letting a parent component "broadcast" values to all descendants. Any descendant can read the value directly, without the intermediary components knowing or caring.
+
+## How Context Works Under the Hood
+
+When you call `setContext(key, value)`, Svelte stores the key-value pair on the **component's internal context object**. This object is part of the component's runtime representation, created during initialization.
+
+When a descendant calls `getContext(key)`, Svelte walks up the component tree from the calling component to its parent, grandparent, and so on, checking each component's context object for a matching key. It returns the first match it finds.
+
+This is why both functions must be called during **component initialization** -- inside the top-level `<script>` block, not inside event handlers, `$effect` callbacks, or `setTimeout`. During initialization, Svelte knows which component is currently being constructed and can associate the context with the right position in the tree. Outside initialization, there is no active component context to reference.
+
+```svelte
+<script lang="ts">
+  import { setContext, getContext } from 'svelte';
+
+  // CORRECT: Called during initialization
+  setContext('key', 'value');
+  const value = getContext('key');
+
+  function handleClick() {
+    // WRONG: Called outside initialization — runtime error
+    // setContext('key', 'new value');
+    // const v = getContext('key');
+  }
+
+  $effect(() => {
+    // WRONG: Called outside initialization — runtime error
+    // const v = getContext('key');
+  });
+</script>
+```
+
+The component tree walk is what gives context its scoping behavior. If a grandparent and a parent both set context with the same key, a child component gets the parent's value (the nearest ancestor wins). This enables **context overriding** -- a powerful pattern we will explore later.
+
+### Context Is Set Once Per Component Instance
+
+A common misconception: `setContext` does not "broadcast" a value. It simply stores a key-value pair on the current component instance. When a descendant calls `getContext`, Svelte walks up the component tree until it finds the nearest ancestor that set a context with that key.
+
+This means:
+
+1. Multiple ancestors can set the same key. The nearest one wins.
+2. Context is established once, during initialization. You cannot call `setContext` again later to "update" the value. (But you can make the value itself reactive -- more on this below.)
+3. Siblings never share context. Two components at the same level in the tree have completely independent context.
+
+## setContext and getContext -- The Foundation
 
 The two core functions work as a pair. The parent calls `setContext` during component initialization, and any descendant calls `getContext` with the same key:
 
@@ -36,19 +104,9 @@ Both functions must be called during component initialization -- inside the top-
 
 If you call `getContext` with a key that no ancestor has set, it returns `undefined`. This is a silent failure that can cause confusing runtime errors later. Typed wrappers (covered below) solve this problem.
 
-### Context Is Set Once Per Component Instance
+## Typed Symbol Keys -- The Professional Approach
 
-A common misconception: `setContext` does not "broadcast" a value. It simply stores a key-value pair on the current component instance. When a descendant calls `getContext`, Svelte walks up the component tree until it finds the nearest ancestor that set a context with that key.
-
-This means:
-
-1. Multiple ancestors can set the same key. The nearest one wins.
-2. Context is established once, during initialization. You cannot call `setContext` again later to "update" the value. (But you can make the value itself reactive -- more on this below.)
-3. Siblings never share context. Two components at the same level in the tree have completely independent context.
-
-## Typed Symbol Keys
-
-String keys are fragile. A typo silently returns `undefined`, and two libraries could accidentally use the same string. Using `Symbol` keys with typed helper functions solves both problems:
+String keys are fragile. A typo silently returns `undefined`, and two libraries could accidentally use the same string key (imagine two libraries both using `'theme'`). Using `Symbol` keys with typed helper functions solves both problems:
 
 ```typescript
 // src/lib/context/theme.ts
@@ -89,11 +147,11 @@ export function getThemeContext(): ThemeConfig {
 </div>
 ```
 
-Symbols are globally unique, so collisions are impossible even across third-party libraries. The typed wrapper functions ensure you always get the correct type back, and if you misuse them, TypeScript catches the error at compile time rather than at runtime.
+Symbols are globally unique. Even `Symbol('theme') !== Symbol('theme')` -- two Symbols with the same description are still different values. This makes key collisions impossible, even across third-party libraries. The typed wrapper functions ensure you always get the correct type back, and if you misuse them, TypeScript catches the error at compile time rather than at runtime.
 
 ### The Full Pattern for Typed Context
 
-In production, the typed context pattern includes a default value and an optional flag:
+In production, the typed context pattern includes error handling and an optional variant:
 
 ```typescript
 // src/lib/context/auth.ts
@@ -132,7 +190,7 @@ The `getAuthContext()` function throws an informative error if context is missin
 
 ## createContext -- The Modern Approach
 
-Svelte 5 introduced `createContext()` as the preferred way to create typed, scoped context. Instead of manually defining Symbol keys and writing `get`/`set` wrapper functions yourself, `createContext` does it all in one call:
+Svelte provides `createContext()` as the preferred way to create typed, scoped context. Instead of manually defining Symbol keys and writing `get`/`set` wrapper functions yourself, `createContext` does it all in one call:
 
 ```typescript
 // src/lib/context/theme.ts
@@ -230,7 +288,39 @@ The `setContext` and `getContext` functions are not deprecated and still work ex
 <p>Using {theme.mode} mode{hasTheme ? '' : ' (default)'}</p>
 ```
 
-A real-world use case: a `<Button>` component that reads accent color from context when used inside a `<ThemeProvider>`, but uses a default blue when used standalone.
+**Production pattern -- Components that work standalone AND in context:**
+
+This is common in component libraries. A `Button` component might check for a `FormContext` to know if it is inside a form, and adapt accordingly:
+
+```svelte
+<!-- Button.svelte -->
+<script lang="ts">
+  import { hasContext, getContext } from 'svelte';
+
+  interface FormContext {
+    disabled: boolean;
+    submitting: boolean;
+  }
+
+  const FORM_KEY = Symbol.for('form-context');
+  const formCtx = hasContext(FORM_KEY)
+    ? getContext<FormContext>(FORM_KEY)
+    : null;
+
+  // Button is disabled if the form is submitting
+  let { disabled = false, ...rest }: { disabled?: boolean } = $props();
+
+  const isDisabled = $derived(disabled || formCtx?.submitting || formCtx?.disabled || false);
+</script>
+
+<button disabled={isDisabled} {...rest}>
+  {#if formCtx?.submitting}
+    Submitting...
+  {:else}
+    <slot />
+  {/if}
+</button>
+```
 
 `getAllContexts()` returns a `Map` of every context key-value pair set by ancestor components. This is rarely needed, but is valuable when building wrapper components that need to forward all context to a dynamic child:
 
@@ -265,12 +355,27 @@ During development, `getAllContexts()` is useful for debugging context issues:
 
 This shows you every context key and value available at this point in the tree. Useful when you are unsure why `getContext` returns `undefined` -- maybe the provider is in the wrong place, or you are using a different key than you think.
 
-## Reactive Context
+## Reactive Context -- The Critical Pattern
 
-Context values are set once during initialization, so passing a plain value creates a static snapshot. If you pass a string or number, descendants receive a copy that never updates. To make context reactive, pass an object that uses `$state` internally with getter functions:
+Context values are set once during initialization, so passing a plain value creates a static snapshot. If the parent's data changes, descendants keep the stale initial value. This is the most common context mistake I see in production code:
 
 ```svelte
-<!-- src/routes/+layout.svelte -->
+<!-- WRONG: Static context — descendants never see updates -->
+<script lang="ts">
+  import { setContext } from 'svelte';
+
+  let mode = $state<'light' | 'dark'>('light');
+
+  // This captures the INITIAL value of mode, not the reactive signal
+  setContext('theme', { mode });
+  // When mode changes to 'dark', descendants still see 'light'
+</script>
+```
+
+To make context reactive, pass an object that uses **getters** to read `$state` values:
+
+```svelte
+<!-- CORRECT: Reactive context with getters -->
 <script lang="ts">
   import { setContext } from 'svelte';
 
@@ -307,8 +412,6 @@ Context values are set once during initialization, so passing a plain value crea
 <input type="color" value={theme.accentColor} oninput={(e) => theme.setAccent(e.currentTarget.value)} />
 ```
 
-The getter `get mode()` returns the live `$state` value each time it is read, so descendants see reactive updates. Without the getter, descendants would receive the initial value and never update.
-
 ### Why Getters Are Required
 
 This is the most common mistake with reactive context. Consider the difference:
@@ -327,6 +430,8 @@ setContext('counter', {
 ```
 
 In the wrong example, `{ count }` creates an object with a property `count` set to the current value of `count` (which is `0`). Changing `count` later does not change the object's property. In the correct example, `get count()` creates a getter that reads `count` fresh every time it is accessed, so it always returns the current value.
+
+This is the same principle that applies everywhere in Svelte 5 reactivity: `$state` is reactive because reading a `$state` variable creates a subscription. If you copy the value into a plain variable or object property, you break the subscription chain.
 
 ### Reactive Context with createContext
 
@@ -371,7 +476,9 @@ export function createCounterContext(initialValue = 0) {
 </script>
 
 {@render children()}
+```
 
+```svelte
 <!-- Consumer (any descendant) -->
 <script lang="ts">
   import { getCounterContext } from '$lib/context/counter';
@@ -386,9 +493,9 @@ export function createCounterContext(initialValue = 0) {
 
 The `createCounterContext` function encapsulates the `$state` and the context setup in a single call, making the provider component trivially simple.
 
-## Context vs Props vs Shared State
+## Context vs Props vs Shared State -- The Decision Matrix
 
-Choosing between these three mechanisms comes down to scope and relationship:
+Choosing between these three mechanisms comes down to scope, relationship, and reactivity needs:
 
 | Mechanism | Scope | Reactivity | Best For |
 |-----------|-------|------------|----------|
@@ -401,27 +508,25 @@ Choosing between these three mechanisms comes down to scope and relationship:
 1. Does only the direct child need the data? Use **props**. They are explicit, easy to trace, and strongly typed by default.
 2. Do multiple descendants in the same subtree need the data, but it should not leak outside that tree? Use **context**. It avoids prop drilling while maintaining tree isolation.
 3. Do unrelated components across different pages need the data? Use **shared state** in a `.svelte.ts` file. It is globally accessible.
+4. Is the data server-specific (per-request)? Use **context** (in a layout load function or hooks). Shared `.svelte.ts` state is dangerous on the server because it is shared across all requests.
 
-### When Context Wins Over Props
+### The Server-Side Gotcha
 
-The classic example is a deeply nested component tree:
+This is a production war story worth internalizing. On the server, `.svelte.ts` module-level state is **shared across all requests**. If you store user data in a `.svelte.ts` file:
 
-```
-Layout
-  Sidebar
-    UserMenu
-      Avatar  <-- needs user data
-    Navigation
-      NavItem  <-- needs theme
-  Main
-    Header
-      Breadcrumb  <-- needs route context
-    Content
-      Widget
-        WidgetBody  <-- needs theme
+```typescript
+// src/lib/state/user.svelte.ts
+// DANGEROUS: This is shared across ALL server-side requests!
+let currentUser = $state<User | null>(null);
+
+export function setUser(user: User) {
+  currentUser = user; // User A's data leaks to User B's request
+}
 ```
 
-Without context, you would need to pass `user` through `Sidebar`, `UserMenu`, and `Avatar` -- even though `Sidebar` and `UserMenu` never use it. With context, `Avatar` calls `getContext` directly, and the intermediate components are unaware.
+Request 1 sets `currentUser` to Alice. Request 2, handled before the module resets, sees Alice's data. This is a security vulnerability and a correctness bug.
+
+Context does not have this problem because it is scoped to a component instance, and each SSR request creates fresh component instances. For per-request data (current user, session, locale), always use context or `event.locals` -- never module-level `.svelte.ts` state.
 
 ### When Shared State Wins Over Context
 
@@ -459,9 +564,129 @@ export const cart = new CartStore();
 
 Any component anywhere can `import { cart } from '$lib/stores/cart.svelte'` and read or modify the cart. No context provider needed, no tree scoping.
 
-### When Context and Shared State Combine
+## Context + Snippets Composition
 
-A common advanced pattern: use shared state for the data store, but use context to scope which instance of that store a subtree uses:
+Snippets are Svelte 5's mechanism for passing renderable content into components. When combined with context, they enable sophisticated composition patterns:
+
+```svelte
+<!-- DataTable.svelte — provides column context to cell renderers -->
+<script lang="ts">
+  import { setContext } from 'svelte';
+  import type { Snippet } from 'svelte';
+
+  interface Column {
+    key: string;
+    label: string;
+    width?: string;
+  }
+
+  let {
+    data,
+    columns,
+    row
+  }: {
+    data: Record<string, unknown>[];
+    columns: Column[];
+    row: Snippet<[Record<string, unknown>, number]>;
+  } = $props();
+
+  setContext('datatable', {
+    get columns() { return columns; },
+    getRowData: (index: number) => data[index]
+  });
+</script>
+
+<table>
+  <thead>
+    <tr>
+      {#each columns as col}
+        <th style:width={col.width}>{col.label}</th>
+      {/each}
+    </tr>
+  </thead>
+  <tbody>
+    {#each data as item, index}
+      <tr>
+        {@render row(item, index)}
+      </tr>
+    {/each}
+  </tbody>
+</table>
+```
+
+```svelte
+<!-- Usage — the snippet receives data, context provides metadata -->
+<DataTable {data} {columns}>
+  {#snippet row(item, index)}
+    <td>{item.name}</td>
+    <td>{item.email}</td>
+    <td>
+      <button onclick={() => editUser(item)}>Edit</button>
+    </td>
+  {/snippet}
+</DataTable>
+```
+
+## Multi-Provider Pattern
+
+Complex applications often need multiple context providers. Instead of deeply nesting them:
+
+```svelte
+<!-- WRONG: Provider pyramid of doom -->
+<ThemeProvider>
+  <AuthProvider>
+    <FeatureFlagProvider>
+      <NotificationProvider>
+        <ToastProvider>
+          {@render children()}
+        </ToastProvider>
+      </NotificationProvider>
+    </FeatureFlagProvider>
+  </AuthProvider>
+</ThemeProvider>
+```
+
+Create a combined provider:
+
+```svelte
+<!-- AppProviders.svelte -->
+<script lang="ts">
+  import type { Snippet } from 'svelte';
+  import { initThemeContext } from '$lib/context/theme';
+  import { initAuthContext } from '$lib/context/auth';
+  import { initFeatureFlagContext } from '$lib/context/features';
+  import { initNotificationContext } from '$lib/context/notifications';
+
+  let { children }: { children: Snippet } = $props();
+
+  // All context is set during initialization — order does not matter
+  initThemeContext({ mode: 'light', accentColor: '#3b82f6' });
+  initAuthContext();
+  initFeatureFlagContext();
+  initNotificationContext();
+</script>
+
+{@render children()}
+```
+
+```svelte
+<!-- +layout.svelte — clean and flat -->
+<script lang="ts">
+  import AppProviders from '$lib/components/AppProviders.svelte';
+  import type { Snippet } from 'svelte';
+  let { children }: { children: Snippet } = $props();
+</script>
+
+<AppProviders>
+  {@render children()}
+</AppProviders>
+```
+
+This is cleaner, and the initialization order of `setContext` calls within a single component does not matter -- they are all associated with the same component's context object.
+
+## Advanced: Form System Using Context
+
+A form system demonstrates the power of context at scale. Each `Form` component creates its own context, and nested `FormField` components read from the nearest form:
 
 ```typescript
 // src/lib/context/form.ts
@@ -470,6 +695,7 @@ import { createContext } from 'svelte';
 interface FormContext {
   readonly values: Record<string, string>;
   readonly errors: Record<string, string>;
+  readonly submitting: boolean;
   setValue: (name: string, value: string) => void;
   validate: () => boolean;
   submit: () => Promise<void>;
@@ -482,20 +708,20 @@ export { getFormContext };
 export function createFormContext(onSubmit: (values: Record<string, string>) => Promise<void>) {
   let values = $state<Record<string, string>>({});
   let errors = $state<Record<string, string>>({});
+  let submitting = $state(false);
 
   const ctx: FormContext = {
     get values() { return values; },
     get errors() { return errors; },
+    get submitting() { return submitting; },
     setValue(name, value) {
       values = { ...values, [name]: value };
-      // Clear error when field is modified
       if (errors[name]) {
         const { [name]: _, ...rest } = errors;
         errors = rest;
       }
     },
     validate() {
-      // Example validation
       const newErrors: Record<string, string> = {};
       for (const [key, value] of Object.entries(values)) {
         if (!value.trim()) newErrors[key] = `${key} is required`;
@@ -505,7 +731,12 @@ export function createFormContext(onSubmit: (values: Record<string, string>) => 
     },
     async submit() {
       if (ctx.validate()) {
-        await onSubmit(values);
+        submitting = true;
+        try {
+          await onSubmit(values);
+        } finally {
+          submitting = false;
+        }
       }
     }
   };
@@ -515,14 +746,19 @@ export function createFormContext(onSubmit: (values: Record<string, string>) => 
 }
 ```
 
-Now each `<Form>` component creates its own context, and nested `<FormField>` components read from the nearest form:
-
 ```svelte
 <!-- Form.svelte -->
 <script lang="ts">
   import { createFormContext } from '$lib/context/form';
+  import type { Snippet } from 'svelte';
 
-  let { onsubmit, children } = $props();
+  let {
+    onsubmit,
+    children
+  }: {
+    onsubmit: (values: Record<string, string>) => Promise<void>;
+    children: Snippet;
+  } = $props();
 
   const form = createFormContext(onsubmit);
 </script>
@@ -537,7 +773,7 @@ Now each `<Form>` component creates its own context, and nested `<FormField>` co
 <script lang="ts">
   import { getFormContext } from '$lib/context/form';
 
-  let { name, label, type = 'text' } = $props();
+  let { name, label, type = 'text' }: { name: string; label: string; type?: string } = $props();
 
   const form = getFormContext();
 </script>
@@ -549,6 +785,7 @@ Now each `<Form>` component creates its own context, and nested `<FormField>` co
     {type}
     value={form.values[name] ?? ''}
     oninput={(e) => form.setValue(name, e.currentTarget.value)}
+    disabled={form.submitting}
     class:error={form.errors[name]}
   />
   {#if form.errors[name]}
@@ -564,20 +801,20 @@ Now each `<Form>` component creates its own context, and nested `<FormField>` co
 
 ```svelte
 <!-- Usage: two independent forms on the same page -->
-<Form onsubmit={async (values) => console.log('Form 1:', values)}>
+<Form onsubmit={async (values) => console.log('Login:', values)}>
   <FormField name="email" label="Email" type="email" />
   <FormField name="password" label="Password" type="password" />
   <button type="submit">Log In</button>
 </Form>
 
-<Form onsubmit={async (values) => console.log('Form 2:', values)}>
+<Form onsubmit={async (values) => console.log('Signup:', values)}>
   <FormField name="name" label="Full Name" />
   <FormField name="company" label="Company" />
   <button type="submit">Sign Up</button>
 </Form>
 ```
 
-Each `Form` creates its own context. The `FormField` inside each form reads from the nearest `Form` ancestor. The two forms do not interfere with each other.
+Each `Form` creates its own context. The `FormField` inside each form reads from the nearest `Form` ancestor. The two forms do not interfere with each other. This is the power of tree-scoped context.
 
 ## Component Composition with Context: A Complete Tabs System
 
@@ -590,13 +827,9 @@ This is the capstone example. A Tabs system is a classic use case for context: t
 import { createContext } from 'svelte';
 
 interface TabsContext {
-  /** The currently active tab ID */
   readonly activeTab: string;
-  /** Register a tab panel -- returns an unregister function */
   registerTab: (id: string) => () => void;
-  /** Switch to a tab */
   selectTab: (id: string) => void;
-  /** All registered tab IDs in order */
   readonly tabs: string[];
 }
 
@@ -614,11 +847,9 @@ export function createTabsContext(initialTab?: string) {
 
     registerTab(id: string) {
       tabs = [...tabs, id];
-      // If this is the first tab and no initial tab was specified, activate it
       if (tabs.length === 1 && !initialTab) {
         activeTab = id;
       }
-      // Return unregister function
       return () => {
         tabs = tabs.filter(t => t !== id);
       };
@@ -642,8 +873,17 @@ export function createTabsContext(initialTab?: string) {
 <!-- src/lib/components/Tabs.svelte -->
 <script lang="ts">
   import { createTabsContext } from '$lib/context/tabs';
+  import type { Snippet } from 'svelte';
 
-  let { initialTab, children, class: className = '' } = $props();
+  let {
+    initialTab,
+    children,
+    class: className = ''
+  }: {
+    initialTab?: string;
+    children: Snippet;
+    class?: string;
+  } = $props();
 
   createTabsContext(initialTab);
 </script>
@@ -653,15 +893,52 @@ export function createTabsContext(initialTab?: string) {
 </div>
 ```
 
-### Step 3: The Tab List and Tab Button
+### Step 3: The Tab List with Keyboard Navigation
 
 ```svelte
 <!-- src/lib/components/TabList.svelte -->
 <script lang="ts">
-  let { children, class: className = '' } = $props();
+  import { getTabsContext } from '$lib/context/tabs';
+  import type { Snippet } from 'svelte';
+
+  let { children, class: className = '' }: { children: Snippet; class?: string } = $props();
+  const tabs = getTabsContext();
+
+  function handleKeydown(e: KeyboardEvent) {
+    const currentIndex = tabs.tabs.indexOf(tabs.activeTab);
+    let nextIndex = currentIndex;
+
+    switch (e.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        e.preventDefault();
+        nextIndex = (currentIndex + 1) % tabs.tabs.length;
+        break;
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        e.preventDefault();
+        nextIndex = (currentIndex - 1 + tabs.tabs.length) % tabs.tabs.length;
+        break;
+      case 'Home':
+        e.preventDefault();
+        nextIndex = 0;
+        break;
+      case 'End':
+        e.preventDefault();
+        nextIndex = tabs.tabs.length - 1;
+        break;
+      default:
+        return;
+    }
+
+    tabs.selectTab(tabs.tabs[nextIndex]);
+
+    const tabButton = document.getElementById(`tab-${tabs.tabs[nextIndex]}`);
+    tabButton?.focus();
+  }
 </script>
 
-<div class="tab-list {className}" role="tablist">
+<div class="tab-list {className}" role="tablist" onkeydown={handleKeydown}>
   {@render children()}
 </div>
 
@@ -674,17 +951,27 @@ export function createTabsContext(initialTab?: string) {
 </style>
 ```
 
+### Step 4: The Tab Button
+
 ```svelte
 <!-- src/lib/components/Tab.svelte -->
 <script lang="ts">
   import { getTabsContext } from '$lib/context/tabs';
   import { onMount } from 'svelte';
+  import type { Snippet } from 'svelte';
 
-  let { id, children, disabled = false } = $props();
+  let {
+    id,
+    children,
+    disabled = false
+  }: {
+    id: string;
+    children: Snippet;
+    disabled?: boolean;
+  } = $props();
 
   const tabs = getTabsContext();
 
-  // Register this tab on mount, unregister on unmount
   onMount(() => {
     const unregister = tabs.registerTab(id);
     return unregister;
@@ -698,6 +985,7 @@ export function createTabsContext(initialTab?: string) {
   aria-selected={isActive}
   aria-controls="panel-{id}"
   id="tab-{id}"
+  tabindex={isActive ? 0 : -1}
   onclick={() => !disabled && tabs.selectTab(id)}
   {disabled}
   class="tab-button"
@@ -734,17 +1022,24 @@ export function createTabsContext(initialTab?: string) {
     opacity: 0.4;
     cursor: not-allowed;
   }
+
+  .tab-button:focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: -2px;
+    border-radius: 4px;
+  }
 </style>
 ```
 
-### Step 4: The Tab Panel
+### Step 5: The Tab Panel
 
 ```svelte
 <!-- src/lib/components/TabPanel.svelte -->
 <script lang="ts">
   import { getTabsContext } from '$lib/context/tabs';
+  import type { Snippet } from 'svelte';
 
-  let { id, children } = $props();
+  let { id, children }: { id: string; children: Snippet } = $props();
 
   const tabs = getTabsContext();
 
@@ -752,12 +1047,7 @@ export function createTabsContext(initialTab?: string) {
 </script>
 
 {#if isActive}
-  <div
-    role="tabpanel"
-    id="panel-{id}"
-    aria-labelledby="tab-{id}"
-    class="tab-panel"
-  >
+  <div role="tabpanel" id="panel-{id}" aria-labelledby="tab-{id}" class="tab-panel">
     {@render children()}
   </div>
 {/if}
@@ -769,7 +1059,7 @@ export function createTabsContext(initialTab?: string) {
 </style>
 ```
 
-### Step 5: Using the Tabs System
+### Step 6: Using the Tabs System
 
 ```svelte
 <script lang="ts">
@@ -820,97 +1110,42 @@ Study this architecture:
 3. `TabPanel` reads `activeTab` to decide whether to render.
 4. No props are drilled. `Tab` and `TabPanel` do not need to receive the active tab from their parent -- they read it from context.
 5. Multiple `Tabs` on the same page work independently because each creates its own context.
+6. Keyboard navigation follows the WCAG-compliant pattern: Arrow keys cycle through tabs, Home/End jump to first/last, and focus follows the active tab via `tabindex` management.
 
-### Adding Keyboard Navigation
+## Context vs Dependency Injection
 
-Production tabs need keyboard navigation. Add it to `TabList` using the context:
+If you come from a Java or .NET background, context might remind you of dependency injection (DI). The comparison is apt but there are important differences:
 
-```svelte
-<!-- Enhanced TabList with keyboard nav -->
-<script lang="ts">
-  import { getTabsContext } from '$lib/context/tabs';
+| DI (Java/Spring) | Svelte Context |
+|-------------------|---------------|
+| Container manages lifecycle | Component tree manages scope |
+| Singleton, request-scoped, prototype | Tree-scoped only |
+| Constructor injection | `getContext()` during init |
+| Registered in configuration | `setContext()` in component |
+| Can be mocked via container | Can be overridden by closer ancestor |
+| Resolved at startup | Resolved at component initialization |
 
-  let { children, class: className = '' } = $props();
-  const tabs = getTabsContext();
-
-  function handleKeydown(e: KeyboardEvent) {
-    const currentIndex = tabs.tabs.indexOf(tabs.activeTab);
-    let nextIndex = currentIndex;
-
-    switch (e.key) {
-      case 'ArrowRight':
-      case 'ArrowDown':
-        e.preventDefault();
-        nextIndex = (currentIndex + 1) % tabs.tabs.length;
-        break;
-      case 'ArrowLeft':
-      case 'ArrowUp':
-        e.preventDefault();
-        nextIndex = (currentIndex - 1 + tabs.tabs.length) % tabs.tabs.length;
-        break;
-      case 'Home':
-        e.preventDefault();
-        nextIndex = 0;
-        break;
-      case 'End':
-        e.preventDefault();
-        nextIndex = tabs.tabs.length - 1;
-        break;
-      default:
-        return;
-    }
-
-    tabs.selectTab(tabs.tabs[nextIndex]);
-
-    // Focus the newly active tab button
-    const tabButton = document.getElementById(`tab-${tabs.tabs[nextIndex]}`);
-    tabButton?.focus();
-  }
-</script>
-
-<div
-  class="tab-list {className}"
-  role="tablist"
-  onkeydown={handleKeydown}
->
-  {@render children()}
-</div>
-```
-
-Now arrow keys cycle through tabs, Home/End jump to the first/last tab, and focus follows the active tab. This is the WCAG-compliant pattern for tab widgets.
+The key difference: Svelte context is implicitly scoped by the component tree. You do not configure a "container" -- the tree itself is the container. This means testing is simple: render the component inside a wrapper that sets the expected context.
 
 ## Advanced Pattern: Nested Context Providers
 
 Context lookups walk up the tree and stop at the first match. This means you can nest providers to override context for a subtree:
 
 ```svelte
-<script lang="ts">
-  import { setThemeContext, getThemeContext } from '$lib/context/theme';
-</script>
-
-<!-- Root: dark theme -->
-<div>
-  <!-- setThemeContext({ mode: 'dark', accentColor: '#7c3aed' }) in layout -->
-
-  <!-- Everything here uses dark theme -->
-  <Sidebar />
-  <Main />
-
-  <!-- Except this subtree, which overrides to light -->
-  {@const _ = setThemeContext({ mode: 'light', accentColor: '#3b82f6' })}
-  <EmbeddedWidget />
-  <!-- EmbeddedWidget and its descendants use light theme -->
-</div>
-```
-
-Wait -- `setContext` can only be called at the top level of a component, not inside a block. To nest context, you need a wrapper component:
-
-```svelte
 <!-- ThemeOverride.svelte -->
 <script lang="ts">
   import { setThemeContext } from '$lib/context/theme';
+  import type { Snippet } from 'svelte';
 
-  let { mode, accentColor, children } = $props();
+  let {
+    mode,
+    accentColor,
+    children
+  }: {
+    mode: 'light' | 'dark';
+    accentColor: string;
+    children: Snippet;
+  } = $props();
 
   setThemeContext({ mode, accentColor, fontSize: 'md' });
 </script>
@@ -940,10 +1175,10 @@ SvelteKit layout files are a natural place for context providers because they wr
 <!-- src/routes/(app)/+layout.svelte -->
 <script lang="ts">
   import { setContext } from 'svelte';
+  import type { Snippet } from 'svelte';
 
-  let { data, children } = $props();
+  let { data, children }: { data: any; children: Snippet } = $props();
 
-  // Every page and component under (app) can access the user
   let user = $state(data.user);
 
   setContext('app', {
@@ -955,7 +1190,62 @@ SvelteKit layout files are a natural place for context providers because they wr
 {@render children()}
 ```
 
-Every page under the `(app)` route group can call `getContext('app')` to access the user. When the user logs in or out (and `data.user` changes), the reactive getter ensures all consumers see the updated value.
+Every page under the `(app)` route group can call `getContext('app')` to access the user.
+
+## Common Pitfalls
+
+### Pitfall 1: Reading context outside initialization
+
+```svelte
+<script lang="ts">
+  import { getContext } from 'svelte';
+
+  // WRONG: Inside setTimeout — not initialization time
+  setTimeout(() => {
+    const theme = getContext('theme'); // Runtime error!
+  }, 0);
+
+  // CORRECT: Read during initialization, use the reference later
+  const theme = getContext<{ mode: string }>('theme');
+  setTimeout(() => {
+    console.log(theme.mode); // Works — using the reference
+  }, 1000);
+</script>
+```
+
+### Pitfall 2: Non-reactive context that looks reactive
+
+```svelte
+<script lang="ts">
+  import { setContext } from 'svelte';
+
+  let count = $state(0);
+
+  // WRONG: Spreads the value, not a getter
+  setContext('counter', { count }); // { count: 0 } — forever 0
+
+  // CORRECT: Getter returns live value
+  setContext('counter', {
+    get count() { return count; }
+  });
+</script>
+```
+
+### Pitfall 3: Mutating context from descendants without actions
+
+```svelte
+<script lang="ts">
+  import { getContext } from 'svelte';
+
+  const theme = getContext<{ mode: string }>('theme');
+
+  // WRONG: Direct mutation bypasses reactivity
+  theme.mode = 'dark'; // May not trigger updates; violates unidirectional flow
+
+  // CORRECT: Use an action method provided by the context
+  // theme.toggle();
+</script>
+```
 
 ## Try It
 
@@ -971,19 +1261,21 @@ Build a complete `Tabs` component system with the following requirements:
 
 5. **TabList component:** Wraps tabs and adds keyboard navigation (ArrowLeft/ArrowRight cycle through tabs, Home/End jump to first/last).
 
-6. **Bonus:** Add animated transitions when switching panels. Use a `$derived` value for the transition direction (left-to-right or right-to-left) based on the index change.
+6. **Bonus:** Make it work with two independent `Tabs` instances on the same page, proving that context isolation works.
 
-7. **Bonus:** Make it work with two independent `Tabs` instances on the same page, proving that context isolation works.
+7. **Bonus:** Add a `FormContext` system using context. Create a `Form` provider that manages field values and errors, and `FormField` consumers that read from the nearest form. Put two independent forms on the same page and verify they do not interfere.
 
 ## Key Takeaways
 
 - `setContext(key, value)` provides data from a parent; `getContext(key)` reads it in any descendant. Both must be called during component initialization.
+- Context works by walking up the component tree to find the nearest ancestor with a matching key -- closer ancestors override further ones.
 - Use `Symbol` keys with typed helper functions to prevent collisions and ensure type safety. Throw informative errors when context is missing.
 - `createContext()` is the preferred approach for new code -- it returns a typed `[get, set]` pair with no manual key management. It optionally accepts a default value.
 - `setContext`/`getContext` still work and are not deprecated, but `createContext` eliminates boilerplate.
 - `hasContext(key)` checks if context exists, enabling components with optional dependencies. `getAllContexts()` returns all ancestor context as a Map.
 - Pass objects with `$state` and **getters** to make context values reactive. Without getters, descendants see a static snapshot.
 - Context is tree-scoped: only descendants of the provider component can access the value. Multiple providers of the same key can coexist -- the nearest one wins.
-- Use props for direct children, context for subtrees, and `.svelte.ts` shared state for global data.
+- On the server, `.svelte.ts` shared state leaks across requests -- use context for per-request data like authenticated user or session.
+- Use props for direct children, context for subtrees, and `.svelte.ts` shared state for global, client-only data.
 - Nested context providers let you override context for a subtree -- useful for theme overrides and scoped configurations.
-- The Tabs pattern (provider creates state, children register and read from context) is a reusable architectural blueprint for any compound component: accordions, form fields, disclosure groups, and more.
+- The Tabs/Form pattern (provider creates state, children register and read from context) is a reusable architectural blueprint for any compound component: accordions, form fields, disclosure groups, and more.

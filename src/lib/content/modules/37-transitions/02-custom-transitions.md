@@ -2,7 +2,7 @@
 
 Svelte's built-in transitions cover the most common animations, but every project eventually needs something unique — a typewriter effect for text, a circular reveal for images, a flip-card rotation for a quiz app, or a staggered wipe for a gallery. Svelte lets you build custom transitions that plug into the same `transition:`, `in:`, and `out:` system you already know. You also get access to `crossfade` for morphing elements between positions (the FLIP technique applied at the framework level), deferred transitions for coordinating cross-component animations, and transition events for orchestrating complex sequences.
 
-This lesson teaches you to write your own CSS and JavaScript transitions from scratch, understand the full transition contract, animate SVG paths with `draw`, pair elements with `crossfade` using `send` and `receive`, and react to transition lifecycle events. By the end you will have built a typewriter, a flip-card, and a circular-reveal transition, and you will understand the performance implications of every design decision.
+This lesson teaches you to write your own CSS and JavaScript transitions from scratch, understand the full transition contract, animate SVG paths with `draw`, pair elements with `crossfade` using `send` and `receive`, and react to transition lifecycle events. By the end you will have built a typewriter, a flip-card, a circular-reveal, and a text-scramble transition, and you will understand the performance implications of every design decision.
 
 ## The Transition Contract
 
@@ -40,6 +40,23 @@ The returned object describes the animation:
 
 The `t` parameter goes from 0 to 1 during intro and from 1 to 0 during outro. The `u` parameter is always `1 - t` — it saves you from writing `1 - t` repeatedly in your animation math. During intro: `t` starts at 0 (invisible) and ends at 1 (fully visible). During outro: `t` starts at 1 (fully visible) and ends at 0 (invisible).
 
+### The `t` and `u` Mental Model
+
+Visualizing `t` and `u` during an intro animation:
+
+```
+Time:  0%   25%   50%   75%   100%
+t:     0    0.25  0.50  0.75  1.0
+u:     1    0.75  0.50  0.25  0.0
+
+During outro, t goes 1→0, u goes 0→1.
+
+t = "how visible the element is"
+u = "how invisible the element is"
+```
+
+Use `t` for properties that should increase (opacity, scale). Use `u` for properties that should decrease (blur, offset, displacement). This mental model makes your animation math intuitive: `opacity: ${t}` means "fully visible when done," and `translateY(${u * 30}px)` means "30px offset at start, 0px when done."
+
 ### Why Two Callback Types? CSS vs Tick
 
 This is the most important performance decision you will make when writing custom transitions.
@@ -63,6 +80,33 @@ Tick path:
 ```
 
 Rule of thumb: if you can express your animation with CSS properties, always use `css`. Only reach for `tick` when CSS genuinely cannot do what you need.
+
+### Which CSS Properties Are Compositor-Friendly?
+
+Not all CSS properties are equal for animation performance:
+
+```
+COMPOSITOR (GPU, smooth, use these):
+  ✓ transform (translate, scale, rotate, skew)
+  ✓ opacity
+  ✓ filter (blur, brightness, contrast, etc.)
+  ✓ clip-path
+
+PAINT (CPU, moderate cost):
+  ⚠ background-color
+  ⚠ color
+  ⚠ box-shadow
+  ⚠ border-color
+
+LAYOUT (CPU, expensive, avoid animating):
+  ✗ width, height
+  ✗ padding, margin
+  ✗ top, left, right, bottom
+  ✗ font-size
+  ✗ border-width
+```
+
+When writing a CSS transition function, stick to compositor-friendly properties whenever possible. Instead of animating `width`, animate `transform: scaleX()`. Instead of animating `top`, animate `transform: translateY()`.
 
 ## Custom CSS Transitions
 
@@ -140,6 +184,60 @@ One of the most powerful aspects of custom transitions is access to the actual D
 </style>
 ```
 
+### Adapting to Element Content
+
+A truly dynamic transition adapts to whatever element it is applied to:
+
+```svelte
+<script>
+  function adaptiveSlide(node, { duration = 500 }) {
+    const rect = node.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+
+    // Determine which side the element is closer to
+    const centerX = rect.left + rect.width / 2;
+    const slideFromRight = centerX > viewportWidth / 2;
+
+    // Calculate distance to edge of viewport
+    const distance = slideFromRight
+      ? viewportWidth - rect.left
+      : rect.right;
+
+    return {
+      duration,
+      css: (t, u) => `
+        transform: translateX(${u * (slideFromRight ? distance : -distance)}px);
+        opacity: ${t};
+      `
+    };
+  }
+
+  let show = $state(true);
+</script>
+
+<button onclick={() => show = !show}>Toggle</button>
+
+{#if show}
+  <div class="left-card" transition:adaptiveSlide>
+    <p>I slide from the left (because I am on the left side of the viewport).</p>
+  </div>
+  <div class="right-card" transition:adaptiveSlide>
+    <p>I slide from the right (because I am on the right side).</p>
+  </div>
+{/if}
+
+<style>
+  .left-card, .right-card {
+    padding: 24px;
+    margin: 8px;
+    border-radius: 12px;
+    max-width: 300px;
+  }
+  .left-card { background: #dbeafe; }
+  .right-card { background: #fef3c7; margin-left: auto; }
+</style>
+```
+
 ### Using the `u` Parameter
 
 The `u` parameter (`1 - t`) is a convenience that eliminates arithmetic in your CSS function. Compare:
@@ -203,6 +301,80 @@ Your transition can accept an `easing` parameter and pass it through. Or you can
 ```
 
 When you supply an `easing` function in the returned object, Svelte applies it to `t` before passing it to your `css` or `tick` function. This means your function always receives a value between 0 and 1, but the progression is shaped by the easing curve — elastic, bounce, cubic, or any custom function you write.
+
+### Writing a Custom Easing Function
+
+Easing functions take a number from 0 to 1 and return a number (usually also 0 to 1, but overshooting is fine for bounce/elastic effects):
+
+```typescript
+// Linear — no easing
+const linear = (t) => t;
+
+// Ease-in quadratic — slow start
+const easeInQuad = (t) => t * t;
+
+// Ease-out quadratic — slow end
+const easeOutQuad = (t) => t * (2 - t);
+
+// Custom: overshoot then settle
+const overshoot = (t) => {
+  const s = 1.70158;
+  return t * t * ((s + 1) * t - s);
+};
+
+// Custom: steps (like a clock ticking)
+const steps = (n) => (t) => Math.floor(t * n) / n;
+```
+
+Use these with any transition:
+
+```svelte
+<div transition:popIn={{ duration: 600, easing: steps(8) }}>
+  I appear in 8 discrete steps
+</div>
+```
+
+### Direction-Aware Transitions
+
+The `options.direction` parameter lets a single transition function behave differently for `in:`, `out:`, and `transition:`:
+
+```svelte
+<script>
+  function directional(node, params, { direction }) {
+    const { duration = 400 } = params;
+
+    if (direction === 'in') {
+      // Intro: slide down and fade in
+      return {
+        duration,
+        css: (t, u) => `
+          transform: translateY(${-u * 20}px);
+          opacity: ${t};
+        `
+      };
+    } else {
+      // Outro: scale down and fade out
+      return {
+        duration: duration * 0.6,  // Outros are faster
+        css: (t) => `
+          transform: scale(${0.8 + t * 0.2});
+          opacity: ${t};
+        `
+      };
+    }
+  }
+
+  let show = $state(true);
+</script>
+
+{#if show}
+  <div transition:directional={{ duration: 500 }}>
+    Slides in from above, scales out when leaving.
+  </div>
+{/if}
+```
+
+This is useful when the intro and outro should feel distinctly different — the intro draws attention (slower, more dramatic), while the outro gets out of the way (faster, subtler).
 
 ## Example: Typewriter Transition
 
@@ -278,6 +450,39 @@ The `speed` parameter controls milliseconds per character. Svelte generates the 
 
 This version mutates `textContent` on every frame. It is more authentic but runs on the main thread. For short strings (under 200 characters), the performance difference is negligible. For long paragraphs, prefer the CSS clip-path approach.
 
+### WRONG vs CORRECT: Typewriter Performance
+
+```typescript
+// WRONG: Manipulating innerHTML in tick (security risk + expensive)
+function badTypewriter(node, { speed = 30 }) {
+  const html = node.innerHTML;  // Captures HTML tags
+  const duration = html.length * speed;
+
+  return {
+    duration,
+    tick: (t) => {
+      const chars = Math.floor(html.length * t);
+      node.innerHTML = html.slice(0, chars);  // XSS risk + parser invoked every frame
+    }
+  };
+}
+
+// CORRECT: Use textContent (safe, lightweight)
+function goodTypewriter(node, { speed = 30 }) {
+  const text = node.textContent;
+  const duration = text.length * speed;
+
+  return {
+    duration,
+    tick: (t) => {
+      node.textContent = text.slice(0, Math.floor(text.length * t));
+    }
+  };
+}
+```
+
+Never use `innerHTML` in a tick function — it triggers the HTML parser 60 times per second and opens XSS vulnerabilities if the content includes user input.
+
 ## Example: Flip-Card Transition
 
 A flip-card rotates an element around the Y-axis, giving a 3D card-flip effect. This requires `perspective` on the parent and `backface-visibility` on the element:
@@ -346,6 +551,19 @@ A flip-card rotates an element around the Y-axis, giving a 3D card-flip effect. 
 
 The `perspective(600px)` in the transform gives depth to the rotation. Without it, the rotation looks flat. The `backface-visibility: hidden` prevents the element from showing its mirror image at rotation angles past 90 degrees. The opacity trick (`t < 0.5 ? t * 2 : 1`) fades in quickly during the first half of the animation and stays fully opaque for the second half, preventing the element from being invisible at the midpoint.
 
+### Perspective: The Depth Parameter
+
+Perspective controls how "deep" the 3D effect appears:
+
+```
+perspective(200px)  — extreme 3D, fisheye-like
+perspective(600px)  — natural, moderate depth
+perspective(1200px) — subtle, almost flat
+perspective(none)   — completely flat (no 3D)
+```
+
+Lower values mean more dramatic perspective distortion. For card flips, 600-1000px typically looks best. For subtle rotations (like a button tilt on hover), 1200-2000px is more appropriate.
+
 ## Example: Circular Reveal Transition
 
 A circular reveal uses `clip-path: circle()` to expand or contract a circular mask from a point on the element. This is a common effect in material design and video editing:
@@ -400,6 +618,55 @@ A circular reveal uses `clip-path: circle()` to expand or contract a circular ma
 
 The key math: `Math.sqrt(width * width + height * height)` computes the diagonal of the element, which is the minimum radius needed for a circle centered at a corner to fully cover the element. When the origin is at the center (50%, 50%), you could use half the diagonal instead, but the full diagonal works universally for any origin point.
 
+### Click-Origin Circular Reveal
+
+A more advanced pattern reveals from wherever the user clicked:
+
+```svelte
+<script>
+  function circularRevealFromClick(node, { duration = 600, clickX = 50, clickY = 50 }) {
+    const rect = node.getBoundingClientRect();
+
+    // Convert click coordinates to percentages relative to the element
+    const originX = ((clickX - rect.left) / rect.width) * 100;
+    const originY = ((clickY - rect.top) / rect.height) * 100;
+
+    // Max radius must reach the farthest corner from the click point
+    const maxDistX = Math.max(clickX - rect.left, rect.right - clickX);
+    const maxDistY = Math.max(clickY - rect.top, rect.bottom - clickY);
+    const maxRadius = Math.sqrt(maxDistX * maxDistX + maxDistY * maxDistY);
+
+    return {
+      duration,
+      css: (t) => `
+        clip-path: circle(${t * maxRadius}px at ${originX}% ${originY}%);
+      `
+    };
+  }
+
+  let show = $state(false);
+  let clickCoords = $state({ x: 0, y: 0 });
+
+  function toggle(event) {
+    clickCoords = { x: event.clientX, y: event.clientY };
+    show = !show;
+  }
+</script>
+
+<button onclick={toggle}>Toggle</button>
+
+{#if show}
+  <div class="panel" transition:circularRevealFromClick={{
+    duration: 800,
+    clickX: clickCoords.x,
+    clickY: clickCoords.y
+  }}>
+    <h3>Click-Origin Reveal</h3>
+    <p>The circle expands from where you clicked the button.</p>
+  </div>
+{/if}
+```
+
 ### Wipe Transition Variant
 
 A horizontal or vertical wipe uses `clip-path: inset()` instead of `circle()`:
@@ -440,6 +707,31 @@ A horizontal or vertical wipe uses `clip-path: inset()` instead of `circle()`:
     <img src="/placeholder.jpg" alt="Demo" />
   </div>
 {/if}
+```
+
+### Diamond Wipe
+
+You can create more exotic clip-path shapes:
+
+```svelte
+<script>
+  function diamondWipe(node, { duration = 700 }) {
+    return {
+      duration,
+      css: (t) => {
+        const size = t * 150; // percentage overshoot to cover corners
+        return `
+          clip-path: polygon(
+            50% ${50 - size}%,
+            ${50 + size}% 50%,
+            50% ${50 + size}%,
+            ${50 - size}% 50%
+          );
+        `;
+      }
+    };
+  }
+</script>
 ```
 
 ## Custom JavaScript Transitions
@@ -539,6 +831,41 @@ A text scramble effect randomly replaces characters before settling on the final
 ```
 
 Characters are progressively revealed from left to right while unrevealed positions show random symbols. When `t` reaches 1, we set the final text to ensure precision. This technique is popular in cyberpunk/hacker UIs and portfolio sites.
+
+### WRONG vs CORRECT: Tick Transition Cleanup
+
+```typescript
+// WRONG: Tick function leaks DOM changes — after outro, text is empty
+function leakyScramble(node, { duration = 1000 }) {
+  const originalText = node.textContent;
+  return {
+    duration,
+    tick: (t) => {
+      node.textContent = originalText.slice(0, Math.floor(originalText.length * t));
+      // When t=0 during outro end, textContent is empty.
+      // The element is removed, but if the transition is interrupted
+      // and the element stays, it shows empty text.
+    }
+  };
+}
+
+// CORRECT: Always restore original state at t=1 and t=0
+function cleanScramble(node, { duration = 1000 }) {
+  const originalText = node.textContent;
+  return {
+    duration,
+    tick: (t) => {
+      if (t === 0 || t === 1) {
+        node.textContent = originalText;
+        return;
+      }
+      node.textContent = originalText.slice(0, Math.floor(originalText.length * t));
+    }
+  };
+}
+```
+
+Always handle the boundary cases (`t === 0` and `t === 1`) in tick transitions. If a transition is interrupted (user toggles quickly), the element might stay in the DOM with a partially-animated state.
 
 ### Counter Transition (Tick-Based)
 
@@ -667,7 +994,36 @@ function customDraw(node, { duration = 800, delay = 0, easing }) {
 }
 ```
 
-Understanding this is valuable because you can extend it — for example, drawing only a portion of the path, or animating the dash gap for a "marching ants" effect.
+Understanding this is valuable because you can extend it — for example, drawing only a portion of the path, or animating the dash gap for a "marching ants" effect:
+
+```typescript
+// Draw only 75% of the path
+function partialDraw(node, { duration = 800, fraction = 0.75 }) {
+  const length = node.getTotalLength();
+  const drawLength = length * fraction;
+
+  return {
+    duration,
+    css: (t) => `
+      stroke-dasharray: ${drawLength} ${length};
+      stroke-dashoffset: ${drawLength * (1 - t)};
+    `
+  };
+}
+
+// Marching ants effect (constant animation, not a transition per se)
+function marchingAnts(node, { duration = 2000, dashSize = 10 }) {
+  const length = node.getTotalLength();
+
+  return {
+    duration,
+    css: (t) => `
+      stroke-dasharray: ${dashSize} ${dashSize};
+      stroke-dashoffset: ${-t * dashSize * 2};
+    `
+  };
+}
+```
 
 ### Building a Signature Animation
 
@@ -838,6 +1194,26 @@ Svelte's `crossfade` does this automatically. You do not need to manage `getBoun
 
 The `key` parameter links the `send` and `receive` pair. When an item leaves the "Todo" column with `out:send={{ key: todo.id }}`, Svelte looks for a matching `in:receive={{ key: todo.id }}` in the "Completed" column and animates between the two positions. The result is a smooth morph that feels like the item physically moves across the screen.
 
+### WRONG vs CORRECT: Crossfade Keys
+
+```svelte
+<!-- WRONG: Using array index as key — items morph to the wrong element -->
+{#each todos as todo, i (i)}
+  <div in:receive={{ key: i }} out:send={{ key: i }}>
+    {todo.text}
+  </div>
+{/each}
+<!-- When todo[0] is removed, todo[1] takes index 0 and morphs from
+     the removed item's position. Visually wrong. -->
+
+<!-- CORRECT: Use stable unique ID -->
+{#each todos as todo (todo.id)}
+  <div in:receive={{ key: todo.id }} out:send={{ key: todo.id }}>
+    {todo.text}
+  </div>
+{/each}
+```
+
 ### Crossfade Configuration Options
 
 The `crossfade` factory accepts several options:
@@ -957,22 +1333,6 @@ Svelte dispatches events at each stage of a transition's lifecycle. Use these to
 
   let show = $state(false);
   let transitioning = $state(false);
-
-  function handleIntroStart() {
-    transitioning = true;
-  }
-
-  function handleIntroEnd() {
-    transitioning = false;
-  }
-
-  function handleOutroStart() {
-    transitioning = true;
-  }
-
-  function handleOutroEnd() {
-    transitioning = false;
-  }
 </script>
 
 <button onclick={() => show = !show} disabled={transitioning}>
@@ -982,10 +1342,10 @@ Svelte dispatches events at each stage of a transition's lifecycle. Use these to
 {#if show}
   <div
     transition:fly={{ y: 30, duration: 500 }}
-    onintrostart={handleIntroStart}
-    onintroend={handleIntroEnd}
-    onoutrostart={handleOutroStart}
-    onoutroend={handleOutroEnd}
+    onintrostart={() => transitioning = true}
+    onintroend={() => transitioning = false}
+    onoutrostart={() => transitioning = true}
+    onoutroend={() => transitioning = false}
   >
     <p>I disable the button while animating!</p>
   </div>
@@ -1136,6 +1496,88 @@ For production applications, you often want every page or section to have a coor
 
 The `staggeredFly` transition uses the `index` parameter to calculate a progressive delay. The first section appears immediately, the second after 80ms, the third after 160ms, and so on. The result is a cascading reveal that gives the page a polished, intentional feel.
 
+### Extracting Transitions to a Library Module
+
+For a real project, you will likely reuse the same transitions across many components. Extract them into a shared module:
+
+```typescript
+// src/lib/transitions/index.ts
+import { crossfade } from "svelte/transition";
+import { cubicOut, quintOut, elasticOut } from "svelte/easing";
+
+// Staggered entry for lists
+export function stagger(node, { index = 0, delay = 50, y = 20, duration = 400 }) {
+  return {
+    delay: index * delay,
+    duration,
+    easing: cubicOut,
+    css: (t, u) => `
+      transform: translateY(${u * y}px);
+      opacity: ${t};
+    `
+  };
+}
+
+// Circular reveal from any origin
+export function reveal(node, { duration = 600, x = 50, y = 50 }) {
+  const { width, height } = node.getBoundingClientRect();
+  const maxRadius = Math.sqrt(width * width + height * height);
+
+  return {
+    duration,
+    css: (t) => `clip-path: circle(${t * maxRadius}px at ${x}% ${y}%);`
+  };
+}
+
+// Pop with elastic overshoot
+export function pop(node, { duration = 500 }) {
+  return {
+    duration,
+    easing: elasticOut,
+    css: (t) => `transform: scale(${t}); opacity: ${t};`
+  };
+}
+
+// Wipe from any direction
+export function wipe(node, { duration = 500, direction = "left" }) {
+  const insetMap = {
+    left:   (u) => `inset(0 ${u * 100}% 0 0)`,
+    right:  (u) => `inset(0 0 0 ${u * 100}%)`,
+    top:    (u) => `inset(0 0 ${u * 100}% 0)`,
+    bottom: (u) => `inset(${u * 100}% 0 0 0)`
+  };
+  const getInset = insetMap[direction] || insetMap.left;
+
+  return { duration, css: (t, u) => `clip-path: ${getInset(u)};` };
+}
+
+// Shared crossfade for list morphing
+export const [send, receive] = crossfade({
+  duration: (d) => Math.sqrt(d) * 35,
+  easing: quintOut,
+  fallback(node) {
+    return {
+      duration: 250,
+      css: (t) => `opacity: ${t}; transform: scale(${0.9 + t * 0.1})`
+    };
+  }
+});
+```
+
+Usage in any component:
+
+```svelte
+<script>
+  import { stagger, reveal, pop, send, receive } from "$lib/transitions";
+</script>
+
+{#each items as item, i (item.id)}
+  <div in:stagger={{ index: i }} out:pop>
+    {item.name}
+  </div>
+{/each}
+```
+
 ## Common Mistakes
 
 **Mistake 1: Returning both `css` and `tick`**
@@ -1204,6 +1646,44 @@ function smooth(node, params) {
 }
 ```
 
+**Mistake 4: Not providing a fallback for crossfade**
+
+```typescript
+// WRONG — no fallback. New items just pop in with no animation.
+const [send, receive] = crossfade({ duration: 400 });
+// Items that are created fresh (no matching send) appear instantly.
+
+// CORRECT — always provide a fallback transition for unmatched elements
+const [send, receive] = crossfade({
+  duration: 400,
+  fallback(node) {
+    return {
+      duration: 250,
+      css: (t) => `opacity: ${t}; transform: scale(${0.9 + t * 0.1})`
+    };
+  }
+});
+```
+
+**Mistake 5: Forgetting to use keyed each blocks with crossfade**
+
+```svelte
+<!-- WRONG: unkeyed each — crossfade cannot track individual items -->
+{#each items as item}
+  <div in:receive={{ key: item.id }} out:send={{ key: item.id }}>
+    {item.name}
+  </div>
+{/each}
+<!-- Svelte reuses DOM nodes by position, not by key. Morphing breaks. -->
+
+<!-- CORRECT: keyed each — items tracked by identity -->
+{#each items as item (item.id)}
+  <div in:receive={{ key: item.id }} out:send={{ key: item.id }}>
+    {item.name}
+  </div>
+{/each}
+```
+
 ## Try It
 
 Build a "Kanban Board" with three columns (To Do, In Progress, Done):
@@ -1213,7 +1693,7 @@ Build a "Kanban Board" with three columns (To Do, In Progress, Done):
 - Use the `draw` transition on an SVG checkmark that appears when an item moves to the "Done" column
 - Disable the move buttons while a transition is in progress using transition events
 - Create a staggered entrance animation for the initial board load
-- Extract your `crossfade` into a shared module and import it into separate column components
+- Extract your `crossfade` and custom transitions into a shared `$lib/transitions.ts` module and import them into separate column components
 
 ## Key Takeaways
 
@@ -1221,11 +1701,14 @@ Build a "Kanban Board" with three columns (To Do, In Progress, Done):
 - Custom CSS transitions return `{ duration, css: (t, u) => string }` where `t` goes 0 to 1 for intro, 1 to 0 for outro, and `u` is always `1 - t`
 - Custom JS transitions use `{ duration, tick: (t, u) => void }` for imperative DOM, canvas, or WebGL work
 - CSS transitions generate `@keyframes` and run on the compositor thread — always prefer CSS when possible
+- Stick to compositor-friendly properties (`transform`, `opacity`, `filter`, `clip-path`) for smooth 60fps animations
 - `tick` transitions run on the main thread at 60fps — use only when CSS cannot express the animation (text manipulation, canvas, etc.)
+- Always handle boundary cases (`t === 0` and `t === 1`) in tick transitions to prevent stale DOM state on interruption
 - `draw` animates SVG strokes using `stroke-dasharray` and `stroke-dashoffset` — works with `path`, `line`, `circle`, and other stroke-based elements
 - `crossfade` creates paired `send`/`receive` transitions implementing the FLIP technique for smooth morphing between positions
-- The `fallback` option in `crossfade` controls what happens when there is no matching pair (default: fade)
+- The `fallback` option in `crossfade` controls what happens when there is no matching pair — always provide one
 - Deferred transitions work by exporting `send`/`receive` from a shared module so decoupled components can animate elements between them
 - Transition events (`onintrostart`, `onintroend`, `onoutrostart`, `onoutroend`) let you coordinate UI behavior, chain sequences, and prevent double-clicks during animations
 - The `direction` parameter in the options argument lets a single transition function behave differently for `in:`, `out:`, and `transition:` usage
 - Always read `node` properties (dimensions, text, styles) in the transition function body, not inside `css` or `tick` — those closures run after the initial measurement
+- Extract reusable transitions into a `$lib/transitions` module for consistency and DRY code across your project

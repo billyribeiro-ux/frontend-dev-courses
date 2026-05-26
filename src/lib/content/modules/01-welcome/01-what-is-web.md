@@ -10,9 +10,11 @@ That is it. Three languages. Every single website. The fanciest web application 
 
 Before we write a single line of Svelte code, we need to understand the platform Svelte runs on. Skipping this is like learning to fly a plane without understanding gravity. You might get airborne, but you will not know what to do when turbulence hits. Every production bug you will ever encounter — broken layouts, slow page loads, hydration mismatches, CORS errors, flashing content — lives somewhere in the chain we are about to walk through.
 
+This is a long lesson. It is supposed to be. The concepts here underpin everything that follows.
+
 ## What Actually Happens When You Type a URL
 
-Let's trace what happens when you type `https://example.com` and press Enter. This is worth understanding because every problem you will ever debug on the web lives somewhere in this chain.
+Let us trace what happens when you type `https://example.com` and press Enter. This is worth understanding because every problem you will ever debug on the web lives somewhere in this chain.
 
 ### Step 1: DNS Lookup — Finding the Address
 
@@ -90,6 +92,16 @@ HTTP defines several request **methods** beyond GET:
 
 In SvelteKit, you will work with all of these. `+page.server.ts` handles GET requests through `load` functions, and POST/PUT/PATCH/DELETE through form actions. `+server.ts` gives you full control over any HTTP method.
 
+### HTTP/2 and HTTP/3: The Modern Web
+
+The original HTTP/1.1 had a major limitation: each TCP connection could handle only one request at a time. Loading a page with 30 resources (HTML, CSS, JS, images) required either 30 sequential requests or opening multiple TCP connections (browsers typically limited this to 6 per domain).
+
+**HTTP/2** (now the standard) solves this with **multiplexing** — many requests and responses can fly over a single connection simultaneously. It also adds **header compression** (headers like `User-Agent` are sent once and referenced by index thereafter) and **server push** (the server can send resources the client has not even asked for yet, though this feature is rarely used in practice).
+
+**HTTP/3** goes further by replacing TCP with **QUIC** (a UDP-based protocol), which eliminates head-of-line blocking and reduces connection setup time. If you deploy to Cloudflare or similar CDNs, your SvelteKit app may already be served over HTTP/3.
+
+Why should you care? Because HTTP/2 changed a key performance strategy. In the HTTP/1.1 era, developers **bundled** everything into as few files as possible to minimize connection overhead. With HTTP/2, many small files are fine — the connection handles them all concurrently. SvelteKit leverages this: it code-splits your app into many small chunks, each loaded on demand. This only works well because HTTP/2 handles concurrent requests efficiently.
+
 ### Step 4: Server Response — Getting the Goods
 
 The server is just a program — running on someone else's computer — that listens for these requests and sends back responses. It might read a file from disk, or query a database, or run some code to generate the HTML on the fly. Either way, it sends back something like:
@@ -127,6 +139,27 @@ That `200 OK` means "here you go, everything went fine." HTTP status codes tell 
 > **Key insight:** A server is not mysterious. It is just a program that listens on a port, receives requests, and sends responses. When you run SvelteKit in development mode with `npm run dev`, *your computer* is the server. When you deploy, Vercel or Cloudflare or your VPS runs that same program on their computer instead.
 
 The response headers matter enormously in production. `Cache-Control: public, max-age=3600` tells the browser "you can cache this for one hour." `Content-Encoding: br` says the body is compressed with Brotli (typically 15-20% smaller than gzip). SvelteKit sets intelligent defaults for these headers, but understanding them lets you tune performance.
+
+### Caching: The Single Most Important Performance Optimization
+
+Caching deserves its own callout because it affects every layer of the stack:
+
+```
+Request: GET /app.js
+
+Browser cache hit?  → Use cached version (0ms, no network)
+  ↓ miss
+CDN cache hit?      → CDN returns cached version (~5ms)
+  ↓ miss
+Server generates    → Full response (~50-500ms)
+  ↓ sends headers
+Cache-Control: public, max-age=31536000, immutable
+  → Browser + CDN cache for 1 year, never ask again
+```
+
+SvelteKit automatically adds hashed filenames to your JS and CSS bundles (e.g., `app-a1b2c3.js`). Because the filename changes when the content changes, these files can be cached forever with `max-age=31536000, immutable`. The browser never re-downloads unchanged code. This single optimization cuts repeat-visit load times dramatically.
+
+For HTML pages (which change when content changes), shorter cache durations are appropriate — or `stale-while-revalidate`, which serves a cached version immediately while fetching a fresh one in the background.
 
 ### Step 5: Parsing and Rendering — Building What You See
 
@@ -176,6 +209,30 @@ The browser fills in pixels — text characters, colors, borders, shadows, image
 The GPU combines all the painted layers into the final image you see on screen. This is why `transform` animations are fast — the browser does not need to repaint anything, it just moves an existing layer on the GPU.
 
 This entire pipeline — parse, style, layout, paint, composite — runs in roughly 16 milliseconds for a well-optimized page (to hit 60fps). Understanding where your code affects this pipeline is the foundation of web performance.
+
+### The Rendering Pipeline Visualized
+
+```
+HTML bytes
+  ↓ parse
+DOM tree
+  ↓ combine ← CSSOM (from CSS bytes)
+Render tree
+  ↓
+Layout (geometry: position, size)
+  ↓
+Paint (pixels: colors, text, borders)
+  ↓
+Composite (GPU: layer assembly)
+  ↓
+Pixels on screen
+
+Cost of changing CSS properties:
+  transform, opacity → Composite only (cheapest — GPU only)
+  color, background  → Paint + Composite (moderate)
+  width, height,     → Layout + Paint + Composite (most expensive)
+  margin, padding
+```
 
 ## HTML: The Tree You Need to See
 
@@ -275,6 +332,26 @@ Both render the same visually (with the right CSS), but the semantic version tel
 
 Semantic HTML elements include: `<header>`, `<footer>`, `<nav>`, `<main>`, `<article>`, `<section>`, `<aside>`, `<figure>`, `<figcaption>`, `<time>`, `<mark>`, `<details>`, `<summary>`. Using them costs nothing and gives you accessibility and SEO for free.
 
+### The Heading Hierarchy: A Common Mistake
+
+HTML headings (`<h1>` through `<h6>`) form a document outline. Screen readers use this outline to let users jump between sections. Skipping heading levels or using headings for styling (not structure) breaks this navigation.
+
+```html
+<!-- WRONG: Heading levels used for visual sizing, not structure -->
+<h1>My Blog</h1>
+<h4>Latest post</h4>        <!-- Skipped h2 and h3! -->
+<h2>About the author</h2>   <!-- Out of order! -->
+
+<!-- CORRECT: Heading levels form a logical outline -->
+<h1>My Blog</h1>
+  <h2>Latest post</h2>
+    <h3>Introduction</h3>
+    <h3>Main points</h3>
+  <h2>About the author</h2>
+```
+
+In Svelte components, this gets tricky because a component does not know what heading level the parent page uses. If your `PostCard` component uses `<h2>`, but it is nested inside a sidebar that already uses `<h2>`, you have duplicate heading levels. The solution: pass the heading level as a prop, or use `<h2>` only in page-level components and use `<p class="text-lg font-bold">` for card titles.
+
 ## CSS: Styling the Tree
 
 CSS is a separate language that **targets nodes in the DOM tree** and applies visual properties to them.
@@ -356,6 +433,35 @@ By default (`box-sizing: content-box`), if you set `width: 200px` and `padding: 
 
 With `border-box`, `width: 200px` means the total rendered width is 200px, and the padding subtracts from the content area. SvelteKit's default project template includes this reset.
 
+### Flexbox and Grid: Modern Layout in Brief
+
+Before flexbox and grid, layouts required floats and positioning hacks. Now you have two powerful layout systems:
+
+**Flexbox** — One-dimensional layout (row OR column). Use it for navbars, button groups, card rows, centering, and any layout along a single axis.
+
+```css
+.navbar {
+  display: flex;          /* Children flow horizontally */
+  align-items: center;    /* Vertically centered */
+  gap: 16px;              /* Space between children */
+  justify-content: space-between; /* Push first/last to edges */
+}
+```
+
+**Grid** — Two-dimensional layout (rows AND columns). Use it for page layouts, dashboards, image galleries, and any layout on a grid.
+
+```css
+.dashboard {
+  display: grid;
+  grid-template-columns: 250px 1fr;      /* Sidebar + content */
+  grid-template-rows: auto 1fr auto;     /* Header + content + footer */
+  gap: 24px;
+  min-height: 100vh;
+}
+```
+
+You will use flexbox daily. You will use grid for page-level layouts and complex multi-axis designs. Both are covered in depth in the CSS modules — for now, know they exist and what problems they solve.
+
 ## JavaScript: Behavior and the Event Loop
 
 HTML gives you structure. CSS gives you presentation. JavaScript gives you **behavior** — the ability to respond to user actions, fetch data, update the page, and make your application feel alive.
@@ -428,6 +534,38 @@ console.log('4 - synchronous');
 ```
 
 > **Why this matters for Svelte:** Svelte batches DOM updates within a microtask. When you change a `$state` variable, Svelte does not immediately update the DOM. It schedules the update and batches it with any other changes that happen in the same synchronous block. This means changing 10 state variables results in one DOM update, not ten. The `tick()` function in Svelte returns a Promise that resolves after the DOM has been updated — it hooks into this same microtask mechanism.
+
+### Async/Await: The Modern Pattern
+
+The event loop handles asynchronous operations, and `async/await` is the modern syntax for working with them:
+
+```javascript
+// The old way: callbacks (callback hell)
+fetch('/api/user')
+  .then(res => res.json())
+  .then(user => {
+    fetch(`/api/posts?userId=${user.id}`)
+      .then(res => res.json())
+      .then(posts => {
+        console.log(user.name, posts.length);
+      });
+  });
+
+// The modern way: async/await (reads like synchronous code)
+async function loadUserData() {
+  const userRes = await fetch('/api/user');
+  const user = await userRes.json();
+
+  const postsRes = await fetch(`/api/posts?userId=${user.id}`);
+  const posts = await postsRes.json();
+
+  console.log(user.name, posts.length);
+}
+```
+
+`await` pauses the function at that line until the Promise resolves, then continues with the result. But it does not block the thread — other code, events, and rendering continue while the function is paused. Under the hood, `async/await` is syntactic sugar over Promises, which use the microtask queue.
+
+You will use `async/await` constantly in SvelteKit — in load functions, API endpoints, event handlers, and component initialization.
 
 ### Why Long Tasks Kill Your UI
 
@@ -544,6 +682,16 @@ Signals work by tracking which parts of your code read which pieces of state:
 
 Compare this to React where the entire component function re-runs when any state changes, and you need `useMemo` to avoid recomputing expensive derived values. Svelte's compiler analyzes your code and sets up only the subscriptions needed — no manual dependency arrays, no stale closures, no rules of hooks.
 
+### The Three Runes You Will Use Most
+
+| Rune | Purpose | React equivalent |
+|------|---------|-----------------|
+| `$state(initialValue)` | Declare reactive state | `useState()` |
+| `$derived(expression)` | Compute a value from state | `useMemo()` |
+| `$effect(() => { ... })` | Run side effects when state changes | `useEffect()` |
+
+The key differences: no dependency arrays, no stale closures, no rules about call order. Svelte's compiler handles all of that statically.
+
 ## From "Pages" to "Apps": The Evolution of Web Architecture
 
 The early web was simple: you clicked a link, the browser requested a new HTML page from the server, and the whole screen refreshed. Every page was independent. This is called a **Multi-Page Application (MPA)**.
@@ -592,6 +740,28 @@ Subsequent navigation → Client-side JS handles it (SPA-like, instant)
 This is not a compromise. It is genuinely better than either pure approach. You get fast first loads (SSR), instant navigation (client-side routing), working forms (progressive enhancement), and great SEO (server-rendered HTML) — all in one framework.
 
 > **The industry agrees:** Next.js (React), Nuxt (Vue), and SvelteKit all converge on this hybrid model. The SPA-only era is over. If you are learning web development in 2026, this is the right starting point.
+
+### What is Hydration, Exactly?
+
+Hydration is a concept that confuses many developers, but it is simple once you see it:
+
+1. The **server** renders your Svelte component to HTML. This HTML is a static snapshot — it has no event listeners, no interactivity, no JavaScript behavior. But it looks exactly like the final page.
+
+2. The browser receives this HTML and displays it immediately. The user can read the content, see the layout, scroll around. This is called **First Contentful Paint (FCP)** and it is fast because no JavaScript needed to run.
+
+3. In the background, the browser downloads your JavaScript bundle.
+
+4. Svelte's hydration code runs. It walks the existing DOM tree (the one the server rendered) and "attaches" to it — registering event listeners, setting up reactive state, and connecting the runes system. It does not re-create the DOM. It takes ownership of the DOM that already exists.
+
+5. Now the page is fully interactive. This moment is called **Time to Interactive (TTI)**.
+
+```
+Server HTML:  <button>Count: 0</button>     ← Static, no click handler
+                    ↓ hydration
+Client JS:    <button>Count: 0</button>     ← Same DOM node, now with onclick
+```
+
+Hydration mismatches happen when the server and client render different HTML. If the server renders `<p>Server time: 3:00 PM</p>` but the client hydrates with `<p>Server time: 3:01 PM</p>`, Svelte has to reconcile the difference. SvelteKit warns you about these mismatches in development. Avoid them by not using time-dependent or random values in SSR.
 
 ## All Three Layers Together
 
@@ -652,6 +822,7 @@ Notice what is happening:
 - **CSS** styles everything — scoped to this component so it cannot leak elsewhere
 - **JavaScript** holds the data (`name` and `color`) and Svelte keeps the DOM in sync automatically
 - **`style:color={color}`** dynamically applies the chosen color to the heading — this is Svelte's style directive, a clean alternative to manual inline styles
+- **`bind:value`** creates a two-way binding — the input displays the current value, and typing in the input updates the variable
 
 Type in the text input and the heading updates instantly. Pick a color and the heading color changes with a smooth transition. No `getElementById`. No manual DOM manipulation. Svelte compiled all of that away for you.
 
@@ -669,6 +840,8 @@ Before moving forward, get comfortable with your browser's developer tools. You 
 
 **Application Panel** — Inspect cookies, localStorage, sessionStorage, IndexedDB, service workers, and cache storage. Essential for debugging authentication, offline behavior, and data persistence.
 
+**Lighthouse Panel** — Runs automated audits for performance, accessibility, best practices, SEO, and PWA compliance. It gives you a score and specific recommendations. Run Lighthouse on every page before shipping.
+
 ## Why This All Matters
 
 You might be thinking: "If Svelte handles all the DOM manipulation, why do I need to understand HTML, CSS, and the browser?"
@@ -681,6 +854,8 @@ Because **the abstraction is not the reality.** Svelte generates HTML, CSS, and 
 - **Your form submission fails silently.** You need to understand HTTP methods, status codes, and CORS.
 - **A screen reader cannot navigate your app.** You need to understand the DOM tree, semantic HTML, and ARIA attributes.
 - **Your animation is janky.** You need to understand which CSS properties trigger layout vs. paint vs. composite.
+- **Your API call works locally but fails in production.** You need to understand CORS, DNS, and the difference between server-side and client-side fetch.
+- **Your page works offline sometimes but not always.** You need to understand caching headers, service workers, and the browser cache.
 
 The best framework developers are the ones who understand the platform the framework runs on. That is what this course is building from the very beginning. Every concept in this lesson — DNS, TCP, HTTP, the DOM tree, the rendering pipeline, the event loop, the cascade — will come back. Not as theory, but as the reason your code behaves the way it does.
 
@@ -690,8 +865,11 @@ The best framework developers are the ones who understand the platform the frame
 - DNS is a recursive lookup chain (browser cache, OS cache, ISP resolver, root server, TLD server, authoritative server) — each new domain costs 20-120ms
 - The TCP three-way handshake and TLS negotiation add 1-2 round trips before a single byte of content arrives
 - HTTP is a simple request/response protocol with methods (GET, POST, PUT, DELETE) and status codes (200, 301, 404, 500)
+- HTTP/2 multiplexes many requests over one connection — this is why SvelteKit code-splits into many small files instead of one big bundle
 - A server is just a program that listens for requests and sends responses — nothing more
+- Caching (browser cache, CDN cache, Cache-Control headers) is the single most impactful performance optimization
 - The browser rendering pipeline is: HTML parse (DOM) + CSS parse (CSSOM) → render tree → layout → paint → composite
+- Animate only `transform` and `opacity` for smooth 60fps — they skip layout and paint, going straight to composite
 - HTML is a tree (the DOM), and everything in web development — CSS, JavaScript, accessibility, frameworks — operates on that tree
 - Semantic HTML (`<nav>`, `<main>`, `<article>`) gives meaning to the tree structure, enabling accessibility and SEO for free
 - CSS specificity is a precise algorithm: inline > ID > class > element, with the cascade as tiebreaker
@@ -699,8 +877,9 @@ The best framework developers are the ones who understand the platform the frame
 - JavaScript is single-threaded with an event loop: call stack, microtask queue (Promises), macrotask queue (setTimeout, events)
 - Long JavaScript tasks block rendering — keep event handlers under 10ms for 60fps
 - Svelte is a compiler that generates surgical DOM updates at build time — no virtual DOM, no runtime diffing
-- Svelte 5's runes ($state, $derived, $effect) use signal-based fine-grained reactivity
+- Svelte 5's runes ($state, $derived, $effect) use signal-based fine-grained reactivity with no dependency arrays
 - SvelteKit gives you server-rendered pages with client-side app behavior — the hybrid model that combines the best of MPAs and SPAs
+- Hydration is Svelte taking ownership of server-rendered HTML — attaching event listeners without re-creating the DOM
 - Understanding the underlying platform makes you a better framework developer, not a slower one
 
 ## Try It
@@ -713,4 +892,6 @@ The best framework developers are the ones who understand the platform the frame
 
 4. **Measure the rendering pipeline:** Open the Performance panel, click Record, scroll around a website for 3 seconds, stop recording. Look at the flame chart. Find examples of "Recalculate Style," "Layout," "Paint," and "Composite Layers." Notice how they relate to each other in time. This is the rendering pipeline in action.
 
-5. **Modify the example:** Take the Svelte greeting example above and add a third input that controls the font size of the heading using a range slider (`<input type="range" min="16" max="72">`). You will need a new `$state` variable, a new `<input>`, and a `style:font-size` directive on the `<h1>`. If you get stuck, that is normal — figuring it out is where the learning happens.
+5. **Compare bundle sizes:** Visit [bundlephobia.com](https://bundlephobia.com) and look up the bundle sizes of `react` + `react-dom` versus `svelte`. Note the difference. Then search for `@sveltejs/kit` — notice that SvelteKit's runtime is minimal because the heavy lifting happens at build time, not in the browser.
+
+6. **Modify the example:** Take the Svelte greeting example above and add a third input that controls the font size of the heading using a range slider (`<input type="range" min="16" max="72">`). You will need a new `$state` variable, a new `<input>`, and a `style:font-size` directive on the `<h1>`. Use `style:font-size="{fontSize}px"` for the dynamic style. If you get stuck, that is normal — figuring it out is where the learning happens.

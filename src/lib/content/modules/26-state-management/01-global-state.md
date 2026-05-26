@@ -1,131 +1,89 @@
 # Global State
 
-So far, all the reactive state you have created lives inside individual components. That works until two components in completely different parts of your app need the same data — a shopping cart total in the header and the cart page, an authentication status in the navbar and a settings panel, a theme preference that affects every component. When state needs to be shared across unrelated components, you need **global state**.
+So far, all the reactive state you have created lives inside individual components. That works until two components in completely different parts of your app need the same data -- a shopping cart total in the header and the cart page, an authentication status in the navbar and a settings panel, a theme preference that affects every component. When state needs to be shared across unrelated components, you need **global state**.
 
 In Svelte 5, global state is remarkably simple: define reactive variables in `.svelte.ts` files and export them. Because JavaScript modules are singletons, every component that imports the same file gets the same state. Change it in one place, and every component that reads it updates automatically.
 
-But this simplicity hides important subtleties — especially around reactivity boundaries, SSR safety, memory leaks, and knowing when global state is the wrong tool. Getting these subtleties wrong leads to security vulnerabilities, hydration mismatches, and bugs that only appear in production under load. This lesson unpacks every one of them.
-
-## The Mental Model: Module Singletons as State Containers
-
-Before touching any code, internalize this mental model. It governs everything that follows.
-
-In JavaScript, when you `import` a module for the first time, the runtime executes that module's top-level code exactly once. Every subsequent `import` of the same module receives a reference to the same module namespace — the same variables, the same objects, the same functions. The module is a **singleton**.
-
-```
-Module: counter.svelte.ts
-┌──────────────────────────────────┐
-│  let count = $state(0);         │  ← created ONCE
-│                                  │
-│  export function getCount() {    │
-│    return count;                 │
-│  }                               │
-└──────────────────────────────────┘
-         ▲              ▲
-         │              │
-   ComponentA.svelte  ComponentB.svelte
-   (same count)       (same count)
-```
-
-When ComponentA calls `increment()`, the `count` variable in the module changes. When ComponentB calls `getCount()`, it reads the same variable and sees the new value. Svelte's reactivity system ensures that any template expression that calls `getCount()` re-evaluates when `count` changes.
-
-This is fundamentally different from frameworks that require a dedicated state management library (Redux, Vuex, Pinia). In Svelte 5, the language-level reactivity primitives (`$state`, `$derived`) combined with JavaScript's module system give you global state for free. No provider components. No store subscriptions. No boilerplate.
-
-The catch? Module singletons behave differently on the server versus the client, and the reactivity boundary requires specific file extensions. Both of these are explored in detail below.
+But this simplicity hides important subtleties -- especially around reactivity boundaries, SSR safety, and knowing when global state is the wrong tool. This lesson covers the exact scenarios where local state breaks down, the two patterns for shared state (functions and classes), the critical SSR pitfall that catches experienced developers, and how to architect state for a production application.
 
 ## When Component-Local State Is Not Enough
 
-Consider an e-commerce app. The "Add to Cart" button lives on a product detail page. The cart icon with a badge showing the item count lives in the header layout. These two components have no parent-child relationship — they are separated by multiple layers of routing.
+Consider an e-commerce app. The "Add to Cart" button lives on a product detail page. The cart icon with a badge showing the item count lives in the header layout. These two components have no parent-child relationship -- they are separated by multiple layers of routing.
 
-You *could* pass cart data through props from a root layout, through intermediate layouts, through pages, down to every component. But this is prop drilling at its worst — dozens of components passing data they do not use just to shuttle it to a descendant.
+You *could* pass cart data through props from a root layout, through intermediate layouts, through pages, down to every component. But this is prop drilling at its worst -- dozens of components passing data they do not use just to shuttle it to a descendant.
 
-```
-// Prop drilling: painful and fragile
-+layout.svelte (owns cart state)
-  └── +layout.svelte (passes cart through)
-       └── +layout.svelte (passes cart through)
-            └── +page.svelte (passes cart through)
-                 └── ProductDetail.svelte (finally uses cart)
+Global state solves this cleanly: both components import the same module, read the same reactive state, and stay in sync automatically.
 
-// Every intermediate component needs: let { cart, ...rest } = $props();
-// Change the cart type? Update every component in the chain.
-```
+### The Five Scenarios Where Global State Is the Right Choice
 
-Global state solves this cleanly: both the product detail and the header import the same module, read the same reactive state, and stay in sync automatically.
+1. **Cross-cutting UI state.** Theme (light/dark), sidebar open/closed, active locale. These affect many components across the entire app.
 
-But do not reach for global state reflexively. Here is the decision tree:
+2. **Shared application data.** Shopping cart, notification queue, active user profile. Multiple unrelated components need to read and write the same data.
 
-```
-Does only one component use this data?
-  → YES: Local $state in the component.
+3. **Client-side cache.** Data fetched from the server that multiple components display. Instead of refetching in each component, store it once globally.
 
-Do a parent and its descendants share this data?
-  → YES: Context API (setContext / getContext).
+4. **Feature flags.** Boolean flags that control which features are enabled. Read from many components, set once.
 
-Do multiple unrelated components need the same data?
-  → Is it per-user data on the server? → event.locals + load functions
-  → Is it scoped to a subtree? → Context API
-  → Is it truly app-wide? → Global state (.svelte.ts module)
-```
+5. **Optimistic UI state.** When you update the server and immediately reflect the change in the UI before the server responds. The optimistic state needs to be accessible wherever the affected data is displayed.
 
-**The rule: if multiple unrelated components need the same data, and that data is app-wide (not scoped to a subtree), use global state.**
+The rule is straightforward: **if multiple unrelated components need the same data, and that data is app-wide (not scoped to a subtree), use global state.**
 
 ## The Reactivity Boundary: Why .svelte.ts Files
 
-Svelte 5 runes (`$state`, `$derived`, `$effect`) are compiled by the Svelte compiler. Regular `.ts` files are processed by TypeScript alone — the Svelte compiler never sees them. If you write `$state(0)` in a plain `.ts` file, it will not compile.
+Svelte 5 runes (`$state`, `$derived`, `$effect`) are compiled by the Svelte compiler. Regular `.ts` files are processed by TypeScript alone -- the Svelte compiler never sees them. If you write `$state(0)` in a plain `.ts` file, it will not compile.
 
-The `.svelte.ts` extension tells Svelte "this file contains runes — compile it." This is the **reactivity boundary**: runes only work in `.svelte` and `.svelte.ts` files.
+The `.svelte.ts` extension tells Svelte "this file contains runes -- compile it." This is the **reactivity boundary**: runes only work in `.svelte` and `.svelte.ts` files.
 
 ```
 src/lib/state/
   counter.svelte.ts   ← Svelte compiles this, runes work
   counter.ts           ← TypeScript only, $state would be a syntax error
-  helpers.ts           ← Plain utilities, no runes needed
 ```
 
 This is not an arbitrary restriction. The Svelte compiler transforms `$state` into the reactive machinery that tracks reads and writes, triggers updates in components, and participates in the dependency graph. Without the compiler pass, `$state` is just a function call that does not exist at runtime.
 
-### What the Compiler Actually Does
+### What the Compiler Does to $state
 
 When you write `let count = $state(0)` in a `.svelte.ts` file, the compiler transforms it into something conceptually like:
 
 ```javascript
-// Conceptual output (simplified)
-import { source, get, set } from 'svelte/internal/client';
+// Simplified conceptual output
+let count = createSignal(0);
 
-const count = source(0);
+// When you read count, the compiler generates:
+// getSignalValue(count) — which registers a dependency
 
-// When you READ count:  get(count) → subscribes the current effect
-// When you WRITE count: set(count, newValue) → notifies all subscribers
+// When you write count = 5, the compiler generates:
+// setSignalValue(count, 5) — which notifies dependents
 ```
 
-The `source()` function creates a reactive signal. Every `get()` call during a component render registers a dependency. Every `set()` call triggers re-evaluation of all dependent expressions. This is the signal-based reactivity that powers Svelte 5.
+This transformation is why `$state` cannot work in plain `.ts` files -- the read/write interception requires compiler output. In a `.ts` file, `count` is just a variable, and reading or writing it does not trigger any reactive machinery.
 
-In a plain `.ts` file, none of this transformation happens. `$state(0)` would be a runtime function call that does not exist, crashing your app.
-
-### Common Mistake: Wrong File Extension
+### WRONG: Using Runes in Plain .ts Files
 
 ```typescript
-// WRONG: src/lib/state/counter.ts (plain TypeScript file)
-let count = $state(0);  // ERROR: $state is not defined
+// WRONG — src/lib/state/counter.ts (no .svelte.ts extension)
+let count = $state(0);  // Error: $state is not defined
 
-export function increment() { count++; }
-export function getCount() { return count; }
+export function increment() {
+  count++;  // Even if this somehow worked, no reactivity
+}
 ```
 
 ```typescript
-// CORRECT: src/lib/state/counter.svelte.ts (Svelte-compiled file)
-let count = $state(0);  // Works — the Svelte compiler processes this
+// CORRECT — src/lib/state/counter.svelte.ts
+let count = $state(0);  // Compiled to a reactive signal
 
-export function increment() { count++; }
-export function getCount() { return count; }
+export function increment() {
+  count++;  // Triggers reactive updates in all subscribers
+}
 ```
 
-The error message you get from the wrong extension is often confusing — it might say `$state is not a function` or `Cannot find name '$state'`. If you see either, check the file extension first.
+The error message when you try to use `$state` in a `.ts` file is not always obvious. Depending on your tooling, you might see "Cannot find name '$state'" or "$state is not a function." The fix is always the same: rename the file to `.svelte.ts`.
 
-## Pattern 1: Module-Level Functions
+## Shared State with Module-Level Functions
 
-The simplest pattern for shared state. Export getter functions so the reactivity chain stays intact:
+The simplest pattern for shared state is a module that exports getter functions:
 
 ```typescript
 // src/lib/state/counter.svelte.ts
@@ -136,7 +94,7 @@ export function increment() {
 }
 
 export function decrement() {
-  if (count > 0) count--;  // Guard against negative values
+  count--;
 }
 
 export function reset() {
@@ -160,69 +118,105 @@ export function getCount() {
 <button onclick={reset}>Reset</button>
 ```
 
+```svelte
+<!-- src/lib/components/Header.svelte -->
+<script>
+  import { getCount } from '$lib/state/counter.svelte';
+</script>
+
+<!-- This updates automatically when count changes in ANY component -->
+<span class="badge">{getCount()}</span>
+```
+
+Both components import from the same module. JavaScript modules are singletons -- `counter.svelte.ts` is loaded once, and every import gets the same `count` variable. When `increment()` is called in `CounterDisplay`, the `getCount()` call in `Header` returns the updated value because they share the same underlying signal.
+
 ### Why Getter Functions Instead of Exporting the Value Directly
 
-You might wonder: why not `export { count }`? The reason is subtle but critical to understand.
+You might wonder: why not `export { count }`? The reason is subtle but important.
 
-When you export a primitive value and another module imports it, the import gets the *current value* at import time. Reassigning the original variable does not update the import — JavaScript module bindings for `let` do track reassignment at the binding level, but Svelte's reactivity depends on reading a `$state` signal through a function call so the compiler can track the dependency.
+When you export a primitive value and another module imports it, Svelte's reactivity depends on reading a `$state` signal through a function call so the compiler can track the dependency at the call site.
 
 ```typescript
-// WRONG — components won't react to changes
+// BROKEN — components won't react to changes
 let count = $state(0);
-export { count }; // Importing modules get a binding, but templates
-                   // can't track reactivity through bare imports
+export { count }; // The imported binding is "live" in ES modules,
+                   // but templates can't track reactivity through
+                   // a bare imported variable
 
-// CORRECT — getter function lets the compiler track the read
+// WORKS — getter function lets the compiler track the read
 export function getCount() {
   return count; // The $state read happens inside the function call
 }
 ```
 
-When a component calls `getCount()` in its template, Svelte can trace the reactive read and subscribe to updates. With a bare import, the reactivity chain breaks because the template sees a static value, not a reactive signal access.
+When a component calls `getCount()` in its template, the Svelte compiler generates code that reads the signal inside the function body, which registers the component as a dependency. With a bare import, the reactivity chain breaks because there is no function call for the compiler to instrument.
 
 **The rule: export getter functions (or use classes with getter properties) for reactive state that crosses module boundaries.**
 
-### When This Pattern Works Best
+### The Object Return Pattern
 
-The module-level function pattern is ideal for:
-- Simple, single-purpose state (a counter, a toggle, a single value)
-- State with 1-3 related values
-- Quick prototyping before you know the full shape of the state
+An alternative to separate getter functions is returning an object with getters:
 
-It breaks down when you have many related values, complex derived computations, or need to group state and behavior into a cohesive unit. That is when you reach for classes.
+```typescript
+// src/lib/state/counter.svelte.ts
+let count = $state(0);
 
-## Pattern 2: Class-Based Shared State
+export function createCounter() {
+  return {
+    get count() { return count; },
+    increment() { count++; },
+    decrement() { count--; },
+    reset() { count = 0; }
+  };
+}
+```
+
+```svelte
+<script>
+  import { createCounter } from '$lib/state/counter.svelte';
+  const counter = createCounter();
+</script>
+
+<p>Count: {counter.count}</p>
+<button onclick={counter.increment}>+</button>
+```
+
+The `get count()` getter is called each time the template reads `counter.count`, which triggers the reactive read. This pattern is clean but has a subtlety: every call to `createCounter()` returns a new object, but all objects share the same underlying `count` variable (the module-level `$state`). They are different facades over the same state.
+
+## Class-Based Shared State
 
 For state with multiple related values and methods, a class is the natural container. Svelte 5 runes work inside class fields, giving you encapsulation and a clean API:
 
 ```typescript
 // src/lib/state/cart.svelte.ts
 
-type CartItem = {
+interface CartItem {
   id: number;
   name: string;
   price: number;
   quantity: number;
-};
+}
 
 class CartState {
   items = $state<CartItem[]>([]);
 
-  // Derived values via getters — these recompute automatically
-  get totalItems(): number {
+  get totalItems() {
     return this.items.reduce((sum, item) => sum + item.quantity, 0);
   }
 
-  get totalPrice(): number {
+  get totalPrice() {
     return this.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
   }
 
-  get isEmpty(): boolean {
+  get isEmpty() {
     return this.items.length === 0;
   }
 
-  get formattedTotal(): string {
-    return `$${this.totalPrice.toFixed(2)}`;
+  get formattedTotal() {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD'
+    }).format(this.totalPrice / 100);
   }
 
   add(product: { id: number; name: string; price: number }) {
@@ -252,10 +246,6 @@ class CartState {
   clear() {
     this.items = [];
   }
-
-  has(id: number): boolean {
-    return this.items.some(i => i.id === id);
-  }
 }
 
 export const cart = new CartState();
@@ -267,161 +257,146 @@ export const cart = new CartState();
   import { cart } from '$lib/state/cart.svelte';
 </script>
 
-<span class="badge">
-  Cart ({cart.totalItems} items, {cart.formattedTotal})
-</span>
-```
+<span>Cart ({cart.totalItems} items, {cart.formattedTotal})</span>
+<button onclick={() => cart.add({ id: 1, name: 'Widget', price: 999 })}>
+  Add Widget
+</button>
 
-```svelte
-<!-- src/routes/products/[id]/+page.svelte -->
-<script>
-  import { cart } from '$lib/state/cart.svelte';
-  let { data } = $props();
-</script>
-
-<h1>{data.product.name}</h1>
-<p>{data.product.description}</p>
-
-{#if cart.has(data.product.id)}
-  <button onclick={() => cart.remove(data.product.id)}>
-    Remove from Cart
-  </button>
-{:else}
-  <button onclick={() => cart.add(data.product)}>
-    Add to Cart
-  </button>
+{#if !cart.isEmpty}
+  <button onclick={() => cart.clear()}>Clear Cart</button>
 {/if}
 ```
 
-### Why Classes Work So Well for Global State
+### Why Classes Work Well for This
 
-The class pattern works because of three properties that align perfectly with Svelte's reactivity:
+The class pattern works because `$state` fields on a class instance are reactive, and `get` accessors (like `totalItems`) are automatically derived -- they recompute when the underlying `$state` fields change. The class instance is an object reference, so importing it does not suffer from the primitive reactivity problem.
 
-1. **`$state` fields on a class instance are reactive.** When you mutate `this.items`, any template reading `cart.items` re-renders.
+Classes also provide:
 
-2. **`get` accessors behave like `$derived`.** They recompute automatically when the underlying `$state` fields change. `cart.totalItems` always reflects the current items — you never need to manually update it.
+1. **Encapsulation.** The `items` array is a public `$state` field, but you could make it private and only expose it through getters if you want to prevent direct manipulation.
 
-3. **Class instances are objects, not primitives.** Importing `cart` from another module gives you a reference to the same object. Unlike primitive exports, object references do not suffer from the "snapshot at import time" problem.
+2. **Validation.** Methods like `updateQuantity` can validate input (checking for negative quantities) before modifying state.
 
-### WRONG vs CORRECT: Exporting Classes
+3. **Computed properties.** Getters like `totalItems` and `formattedTotal` are derived from `items` and recompute automatically.
+
+4. **Clear API.** Components interact with the cart through a well-defined interface: `add()`, `remove()`, `updateQuantity()`, `clear()`. The internal state management is hidden.
+
+### Class with Private Fields and Validation
+
+For production code, you may want stricter encapsulation:
 
 ```typescript
-// WRONG: Exporting the class instead of an instance
-export class CartState {
-  items = $state<CartItem[]>([]);
-  // ...
-}
-// Each component would need: const cart = new CartState()
-// That creates SEPARATE instances — not shared state!
+// src/lib/state/cart.svelte.ts
 
-// CORRECT: Export a singleton instance
 class CartState {
-  items = $state<CartItem[]>([]);
-  // ...
+  #items = $state<CartItem[]>([]);
+  #maxQuantityPerItem = 99;
+
+  get items(): ReadonlyArray<CartItem> {
+    return this.#items;
+  }
+
+  get totalItems() {
+    return this.#items.reduce((sum, item) => sum + item.quantity, 0);
+  }
+
+  get totalPrice() {
+    return this.#items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  }
+
+  get isEmpty() {
+    return this.#items.length === 0;
+  }
+
+  add(product: { id: number; name: string; price: number }): boolean {
+    const existing = this.#items.find(i => i.id === product.id);
+
+    if (existing) {
+      if (existing.quantity >= this.#maxQuantityPerItem) {
+        return false; // Cannot add more
+      }
+      existing.quantity++;
+    } else {
+      this.#items.push({ ...product, quantity: 1 });
+    }
+
+    return true;
+  }
+
+  remove(id: number) {
+    this.#items = this.#items.filter(i => i.id !== id);
+  }
+
+  updateQuantity(id: number, quantity: number) {
+    if (quantity < 0 || quantity > this.#maxQuantityPerItem) return;
+
+    const item = this.#items.find(i => i.id === id);
+    if (!item) return;
+
+    if (quantity === 0) {
+      this.remove(id);
+    } else {
+      item.quantity = quantity;
+    }
+  }
+
+  clear() {
+    this.#items = [];
+  }
 }
+
 export const cart = new CartState();
-// Every import gets the SAME instance
 ```
 
-```typescript
-// ALSO WRONG: Exporting a factory function without memoization
-export function createCart() {
-  return new CartState();
-}
-// Each call creates a new instance — not shared!
+Private fields (`#items`) prevent external code from directly mutating the array. Components must go through the public methods, which enforce validation rules. The `items` getter returns `ReadonlyArray` to communicate at the type level that direct mutation is not intended.
 
-// CORRECT if you need lazy initialization:
-let _cart: CartState | null = null;
-export function getCart() {
-  if (!_cart) _cart = new CartState();
-  return _cart;
-}
-```
+**Note:** Private `$state` fields with `#` are supported in Svelte 5. The compiler correctly transforms them into reactive signals even with the private field syntax.
 
-## Pattern 3: Private Fields for Encapsulation
+## Real Example: Shared Auth State
 
-For state that components should read but never directly mutate, use TypeScript private fields:
+Here is a practical example -- an auth state class used across an entire app:
 
 ```typescript
 // src/lib/state/auth.svelte.ts
-
 interface User {
   id: string;
   name: string;
   email: string;
-  role: 'admin' | 'user' | 'moderator';
-  avatarUrl?: string;
+  role: 'admin' | 'user';
+  avatarUrl: string | null;
 }
 
 class AuthState {
-  // Private — only methods on this class can change the user
   #user = $state<User | null>(null);
-  #loading = $state(false);
-  #error = $state<string | null>(null);
 
-  // Public read-only access via getters
-  get user(): User | null {
+  get user() {
     return this.#user;
   }
 
-  get isLoggedIn(): boolean {
+  get isLoggedIn() {
     return this.#user !== null;
   }
 
-  get isAdmin(): boolean {
+  get isAdmin() {
     return this.#user?.role === 'admin';
   }
 
-  get isModerator(): boolean {
-    return this.#user?.role === 'moderator' || this.isAdmin;
-  }
-
-  get loading(): boolean {
-    return this.#loading;
-  }
-
-  get error(): string | null {
-    return this.#error;
-  }
-
-  get displayName(): string {
+  get displayName() {
     return this.#user?.name ?? 'Guest';
   }
 
-  async login(email: string, password: string): Promise<boolean> {
-    this.#loading = true;
-    this.#error = null;
-
-    try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        this.#error = data.message ?? 'Login failed';
-        return false;
-      }
-
-      this.#user = await response.json();
-      return true;
-    } catch (err) {
-      this.#error = 'Network error — please try again';
-      return false;
-    } finally {
-      this.#loading = false;
-    }
+  /**
+   * Called after successful login or when session is restored.
+   */
+  setUser(userData: User) {
+    this.#user = userData;
   }
 
-  logout() {
+  /**
+   * Called after logout.
+   */
+  clearUser() {
     this.#user = null;
-    this.#error = null;
-  }
-
-  clearError() {
-    this.#error = null;
   }
 }
 
@@ -434,46 +409,205 @@ export const auth = new AuthState();
   import { auth } from '$lib/state/auth.svelte';
 </script>
 
-<nav class="flex items-center gap-4 p-4 bg-gray-900 text-white">
-  <a href="/" class="font-bold text-lg">MyApp</a>
-
-  <div class="ml-auto flex items-center gap-4">
-    {#if auth.isLoggedIn}
-      <span>Welcome, {auth.displayName}</span>
-      {#if auth.isAdmin}
-        <a href="/admin" class="text-yellow-300">Admin</a>
-      {/if}
-      <button onclick={() => auth.logout()} class="text-red-300">
-        Log out
-      </button>
-    {:else}
-      <a href="/login">Log in</a>
+<nav>
+  {#if auth.isLoggedIn}
+    <span>Welcome, {auth.displayName}</span>
+    {#if auth.isAdmin}
+      <a href="/admin">Admin Panel</a>
     {/if}
-  </div>
+    <button onclick={() => auth.clearUser()}>Log out</button>
+  {:else}
+    <a href="/login">Log in</a>
+  {/if}
 </nav>
 ```
 
-### Why Private Fields Matter
+Every component that imports `auth` sees the same state. When a login action calls `auth.setUser(user)`, the navbar, the settings page, and any other component reading `auth.isLoggedIn` all update instantly.
 
-Without private fields, any component could do `auth.user = someObject` and set the user to arbitrary data, bypassing validation. Private fields enforce that all state transitions flow through the class methods, which can validate input, handle errors, and maintain invariants.
+### Initializing Auth State from Server Data
 
-```typescript
-// Without private fields — any component can corrupt state
-class AuthState {
-  user = $state<User | null>(null);
-}
-export const auth = new AuthState();
-// Component can do: auth.user = { id: 'fake', role: 'admin' } — no validation!
+In a SvelteKit application, the user's auth state comes from the server (via `event.locals.user` set in hooks). How do you get this server-side data into the client-side auth state?
 
-// With private fields — all changes go through methods
-class AuthState {
-  #user = $state<User | null>(null);
-  get user() { return this.#user; }
-  // Only login() and logout() can change #user
-}
+The answer is a layout component that bridges the gap:
+
+```svelte
+<!-- src/routes/+layout.svelte -->
+<script>
+  import { auth } from '$lib/state/auth.svelte';
+
+  let { data, children } = $props();
+
+  // Sync server-side user data to client-side auth state
+  $effect(() => {
+    if (data.user) {
+      auth.setUser(data.user);
+    } else {
+      auth.clearUser();
+    }
+  });
+</script>
+
+{@render children()}
 ```
 
-This is especially important for state that has security implications (authentication, authorization) or complex invariants (a shopping cart where quantities must be positive).
+```typescript
+// src/routes/+layout.server.ts
+export const load = async ({ locals }) => {
+  return {
+    user: locals.user  // Set by hooks.server.ts
+  };
+};
+```
+
+This pattern is essential: the server is the source of truth for auth (it validates the session), and the client-side state is a synchronized copy that components can reactively read.
+
+## Real Example: Notification System
+
+Here is a complete notification toast system as global state:
+
+```typescript
+// src/lib/state/notifications.svelte.ts
+type NotificationType = 'info' | 'success' | 'warning' | 'error';
+
+interface Notification {
+  id: string;
+  message: string;
+  type: NotificationType;
+  createdAt: number;
+}
+
+class NotificationState {
+  #notifications = $state<Notification[]>([]);
+  #maxVisible = 5;
+  #defaultDuration = 5000; // ms
+
+  get all() {
+    return this.#notifications;
+  }
+
+  get visible() {
+    return this.#notifications.slice(0, this.#maxVisible);
+  }
+
+  get count() {
+    return this.#notifications.length;
+  }
+
+  add(message: string, type: NotificationType = 'info', duration?: number) {
+    const id = crypto.randomUUID();
+    const notification: Notification = {
+      id,
+      message,
+      type,
+      createdAt: Date.now()
+    };
+
+    this.#notifications = [notification, ...this.#notifications];
+
+    // Auto-dismiss after duration
+    const timeout = duration ?? this.#defaultDuration;
+    if (timeout > 0) {
+      setTimeout(() => this.dismiss(id), timeout);
+    }
+
+    return id;
+  }
+
+  dismiss(id: string) {
+    this.#notifications = this.#notifications.filter(n => n.id !== id);
+  }
+
+  clear() {
+    this.#notifications = [];
+  }
+
+  // Convenience methods
+  info(message: string) { return this.add(message, 'info'); }
+  success(message: string) { return this.add(message, 'success'); }
+  warning(message: string) { return this.add(message, 'warning'); }
+  error(message: string) { return this.add(message, 'error', 0); } // Errors persist
+}
+
+export const notifications = new NotificationState();
+```
+
+```svelte
+<!-- src/lib/components/ToastContainer.svelte -->
+<script>
+  import { notifications } from '$lib/state/notifications.svelte';
+  import { fly, fade } from 'svelte/transition';
+</script>
+
+<div class="toast-container" aria-live="polite">
+  {#each notifications.visible as toast (toast.id)}
+    <div
+      class="toast toast-{toast.type}"
+      in:fly={{ y: -20, duration: 200 }}
+      out:fade={{ duration: 150 }}
+    >
+      <p>{toast.message}</p>
+      <button onclick={() => notifications.dismiss(toast.id)} aria-label="Dismiss">
+        &times;
+      </button>
+    </div>
+  {/each}
+</div>
+
+<style>
+  .toast-container {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 400px;
+  }
+
+  .toast {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    color: white;
+  }
+
+  .toast-info { background: #3b82f6; }
+  .toast-success { background: #22c55e; }
+  .toast-warning { background: #f59e0b; color: #1a1a1a; }
+  .toast-error { background: #ef4444; }
+
+  button {
+    background: none;
+    border: none;
+    color: inherit;
+    font-size: 1.25rem;
+    cursor: pointer;
+    padding: 0 4px;
+  }
+</style>
+```
+
+Now any component can trigger a notification:
+
+```svelte
+<script>
+  import { notifications } from '$lib/state/notifications.svelte';
+
+  async function handleSubmit() {
+    const result = await saveData();
+
+    if (result.success) {
+      notifications.success('Changes saved successfully!');
+    } else {
+      notifications.error(`Failed to save: ${result.error}`);
+    }
+  }
+</script>
+```
 
 ## SSR Considerations: The Shared-State Trap
 
@@ -484,83 +618,40 @@ On the server, JavaScript modules are loaded once and shared across all requests
 ```typescript
 // DANGEROUS on the server — shared across all requests
 export const auth = new AuthState();
-// Request 1: auth.login(userA) → auth.user = User A
-// Request 2: auth.user is STILL User A — a security vulnerability!
+// If User A logs in, auth.user is set for EVERY subsequent request
 ```
 
-This is a **state pollution** bug, and it is a security vulnerability. It can also cause data leaks between users — imagine User A's shopping cart items appearing for User B.
+This is a **state pollution** bug, and it is a security vulnerability. Let me be extremely clear about how this happens:
 
-### Understanding Why This Happens
+1. Server starts. `auth.svelte.ts` is loaded. `auth` is created with `user = null`.
+2. User A's request arrives. The root layout's `$effect` calls `auth.setUser(alice)`. Now `auth.user` is Alice.
+3. User B's request arrives (a different person, different browser). But the module-level `auth.user` is still Alice from step 2.
+4. If any server-rendered component reads `auth.user`, it shows Alice's data to User B.
 
-```
-SERVER PROCESS (single Node.js instance)
-┌─────────────────────────────────────────┐
-│  Module: auth.svelte.ts                 │
-│  ┌─────────────────────┐                │
-│  │ auth = new AuthState()│  ← ONE instance│
-│  └─────────────────────┘                │
-│        ▲          ▲          ▲          │
-│        │          │          │          │
-│   Request A   Request B   Request C    │
-│   (User 1)   (User 2)   (User 3)      │
-│   ALL SEE THE SAME auth OBJECT         │
-└─────────────────────────────────────────┘
+Wait -- step 2 mentions `$effect`, which does not run on the server. So is this actually a problem?
 
-CLIENT (each browser tab is a separate JS runtime)
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│ Tab 1        │  │ Tab 2        │  │ Tab 3        │
-│ auth = new() │  │ auth = new() │  │ auth = new() │
-│ (isolated)   │  │ (isolated)   │  │ (isolated)   │
-└──────────────┘  └──────────────┘  └──────────────┘
-```
+**Yes, but the danger is more subtle.** The real risk is if you read or write module-level state in server-side code: load functions, form actions, or hooks. If a load function does `auth.setUser(data.user)` (instead of using `$effect` in a client component), that mutation persists across requests on the server.
 
-On the client, each browser tab runs its own JavaScript runtime, so module singletons are naturally isolated per user. On the server, a single Node.js process handles many requests, and modules are loaded once and cached. This asymmetry is the root of the problem.
+### The Solution Depends on What the State Represents
 
-### The Solution: Categorize Your State
+**Per-request data** (current user, request-specific settings): Use **`event.locals`** in server-side code and sync to client-side state in a layout. Context is created per component tree, so each request gets its own instance.
 
-The solution depends on what the state represents:
+**Truly global data** (theme preference, feature flags loaded at startup): Can be module-level, but only if it is the same for every user.
 
-**Per-request data (current user, request-specific settings):**
-Use **context** or `event.locals` in server-side code. Context is created per component tree, so each request gets its own instance.
+**Client-only state** (shopping cart, UI state): Safe as module-level state because each browser tab runs its own JavaScript instance. But guard against the module running on the server during SSR.
+
+### The Safe Pattern for Client-Only State
 
 ```typescript
-// src/hooks.server.ts — per-request, never polluted
-import type { Handle } from '@sveltejs/kit';
-
-export const handle: Handle = async ({ event, resolve }) => {
-  const session = event.cookies.get('session');
-  if (session) {
-    event.locals.user = await getUserFromSession(session);
-  }
-  return resolve(event);
-};
-```
-
-```typescript
-// src/routes/+layout.server.ts — pass user to pages via load
-import type { LayoutServerLoad } from './$types';
-
-export const load: LayoutServerLoad = async ({ locals }) => {
-  return { user: locals.user ?? null };
-};
-```
-
-**Truly global data (theme, feature flags, configuration):**
-Can be module-level, but only if it is the same for every user. A dark mode preference that defaults to "light" and is customized client-side is safe. A feature flag loaded from a server config file is safe.
-
-**Client-only state (shopping cart, UI preferences, form drafts):**
-Safe as module-level state because each browser tab runs its own JavaScript instance. But guard against the module running on the server during SSR.
-
-```typescript
-// Safe pattern: state that is inherently client-only
+// src/lib/state/cart.svelte.ts
 import { browser } from '$app/environment';
 
 class CartState {
   items = $state<CartItem[]>([]);
 
   constructor() {
-    // Restore from localStorage on the client
     if (browser) {
+      // Restore from localStorage only on the client
       const saved = localStorage.getItem('cart');
       if (saved) {
         try {
@@ -572,8 +663,18 @@ class CartState {
     }
   }
 
-  add(item: CartItem) {
-    this.items.push(item);
+  add(product: CartItem) {
+    // ... add logic ...
+    this.#persist();
+  }
+
+  remove(id: number) {
+    this.items = this.items.filter(i => i.id !== id);
+    this.#persist();
+  }
+
+  clear() {
+    this.items = [];
     this.#persist();
   }
 
@@ -584,424 +685,327 @@ class CartState {
   }
 }
 
-// On the server during SSR, the cart will be empty (which is correct —
-// the client will hydrate with the real cart from localStorage)
+// This instance is safe because the cart is client-side only.
+// On the server during SSR, it will be empty (which is correct).
 export const cart = new CartState();
 ```
 
-### WRONG vs CORRECT: Per-User State
+The `browser` check from `$app/environment` ensures localStorage is only accessed on the client. On the server, the cart starts empty, which is correct for SSR -- the actual cart data loads on the client after hydration.
+
+### The Safe Pattern for Per-User State
+
+For per-user data on the server, always use SvelteKit's built-in mechanisms:
 
 ```typescript
-// WRONG: Per-user state as a module singleton
-// src/lib/state/user-preferences.svelte.ts
-class UserPreferences {
-  fontSize = $state(16);
-  language = $state('en');
-  notifications = $state(true);
-}
-export const prefs = new UserPreferences();
-// On the server, User A sets language='fr',
-// then User B sees language='fr' too!
-
-// CORRECT: Use load functions for per-user data
+// CORRECT: Load user data through SvelteKit's load functions
 // src/routes/+layout.server.ts
-export const load: LayoutServerLoad = async ({ locals, cookies }) => {
-  const prefs = await getUserPreferences(locals.user?.id);
-  return { prefs };
+export const load = async ({ locals }) => {
+  return {
+    user: locals.user  // Per-request, set by hooks
+  };
 };
-
-// Then in the component:
-// let { data } = $props();
-// let fontSize = $state(data.prefs.fontSize);
 ```
 
-## Persistence: Syncing State with localStorage
+```svelte
+<!-- CORRECT: Sync to client-side state in a layout component -->
+<script>
+  import { auth } from '$lib/state/auth.svelte';
 
-Global state in memory is lost on page refresh. For state that should persist across sessions, sync with `localStorage`:
+  let { data, children } = $props();
+
+  // $effect runs only on the client, not during SSR
+  $effect(() => {
+    if (data.user) {
+      auth.setUser(data.user);
+    } else {
+      auth.clearUser();
+    }
+  });
+</script>
+
+{@render children()}
+```
+
+The server provides per-request user data through `event.locals` and load functions. The client syncs that data to the global auth state. This is safe because:
+- The server never reads from the `auth` module-level state (it uses `event.locals`)
+- The client has its own JavaScript instance per tab
+- `$effect` syncs the server data to the client state after hydration
+
+## State Initialization Strategies
+
+### Lazy Initialization
+
+For state that is expensive to compute initially or depends on browser APIs:
 
 ```typescript
-// src/lib/state/theme.svelte.ts
+// src/lib/state/preferences.svelte.ts
 import { browser } from '$app/environment';
 
-type Theme = 'light' | 'dark' | 'system';
+class PreferencesState {
+  #initialized = false;
+  #theme = $state<'light' | 'dark'>('light');
+  #fontSize = $state<'small' | 'medium' | 'large'>('medium');
 
-class ThemeState {
-  #mode = $state<Theme>('system');
+  #init() {
+    if (this.#initialized || !browser) return;
+    this.#initialized = true;
 
-  constructor() {
-    if (browser) {
-      const saved = localStorage.getItem('theme') as Theme | null;
-      if (saved && ['light', 'dark', 'system'].includes(saved)) {
-        this.#mode = saved;
+    const saved = localStorage.getItem('preferences');
+    if (saved) {
+      try {
+        const data = JSON.parse(saved);
+        this.#theme = data.theme ?? 'light';
+        this.#fontSize = data.fontSize ?? 'medium';
+      } catch {
+        // Use defaults
       }
     }
-  }
 
-  get mode(): Theme {
-    return this.#mode;
-  }
-
-  get isDark(): boolean {
-    if (this.#mode === 'system') {
-      return browser
-        ? window.matchMedia('(prefers-color-scheme: dark)').matches
-        : false;
+    // Respect system theme preference
+    if (!saved) {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      this.#theme = prefersDark ? 'dark' : 'light';
     }
-    return this.#mode === 'dark';
   }
 
-  get cssClass(): string {
-    return this.isDark ? 'dark' : 'light';
+  get theme() {
+    this.#init();
+    return this.#theme;
   }
 
-  set(theme: Theme) {
-    this.#mode = theme;
-    if (browser) {
-      localStorage.setItem('theme', theme);
-      document.documentElement.classList.toggle('dark', this.isDark);
-    }
+  set theme(value: 'light' | 'dark') {
+    this.#theme = value;
+    this.#persist();
+  }
+
+  get isDark() {
+    return this.theme === 'dark';
   }
 
   toggle() {
-    this.set(this.#mode === 'dark' ? 'light' : 'dark');
+    this.theme = this.isDark ? 'light' : 'dark';
   }
 
-  cycle() {
-    const order: Theme[] = ['light', 'dark', 'system'];
-    const currentIndex = order.indexOf(this.#mode);
-    this.set(order[(currentIndex + 1) % order.length]);
+  #persist() {
+    if (!browser) return;
+    localStorage.setItem('preferences', JSON.stringify({
+      theme: this.#theme,
+      fontSize: this.#fontSize
+    }));
+  }
+}
+
+export const preferences = new PreferencesState();
+```
+
+The lazy initialization pattern (`#init()` called on first read) avoids accessing `localStorage` until the state is actually needed. This is especially important during SSR, where `localStorage` does not exist.
+
+## Testing Shared State
+
+Global state modules are straightforward to test because they are plain JavaScript with a defined API:
+
+```typescript
+// src/lib/state/cart.svelte.test.ts
+import { describe, it, expect, beforeEach } from 'vitest';
+import { cart } from './cart.svelte';
+
+describe('CartState', () => {
+  beforeEach(() => {
+    cart.clear();  // Reset between tests
+  });
+
+  it('adds items', () => {
+    cart.add({ id: 1, name: 'Widget', price: 999 });
+    expect(cart.totalItems).toBe(1);
+  });
+
+  it('increments quantity for duplicate items', () => {
+    cart.add({ id: 1, name: 'Widget', price: 999 });
+    cart.add({ id: 1, name: 'Widget', price: 999 });
+    expect(cart.totalItems).toBe(2);
+    expect(cart.items.length).toBe(1); // One entry, quantity 2
+  });
+
+  it('removes items', () => {
+    cart.add({ id: 1, name: 'Widget', price: 999 });
+    cart.remove(1);
+    expect(cart.isEmpty).toBe(true);
+  });
+
+  it('computes total price', () => {
+    cart.add({ id: 1, name: 'Widget', price: 999 });
+    cart.add({ id: 2, name: 'Gadget', price: 1999 });
+    expect(cart.totalPrice).toBe(2998);
+  });
+
+  it('validates quantity bounds', () => {
+    cart.add({ id: 1, name: 'Widget', price: 999 });
+    cart.updateQuantity(1, -5);
+    // Negative quantity should be rejected or remove the item
+    expect(cart.totalItems).toBeLessThanOrEqual(1);
+  });
+
+  it('clears all items', () => {
+    cart.add({ id: 1, name: 'Widget', price: 999 });
+    cart.add({ id: 2, name: 'Gadget', price: 1999 });
+    cart.clear();
+    expect(cart.isEmpty).toBe(true);
+    expect(cart.totalItems).toBe(0);
+    expect(cart.totalPrice).toBe(0);
+  });
+});
+```
+
+**Important:** Because module-level state persists across tests, you must reset the state in `beforeEach`. Without the `cart.clear()` call, items from one test would leak into the next. This is why every state class should have a `clear()` or `reset()` method.
+
+## When NOT to Use Global State
+
+Global state is not always the answer. Here is a decision framework:
+
+| Scenario | Right tool |
+|----------|-----------|
+| Only one component uses this data | Local `$state` in the component |
+| Parent and its descendants share data | Context API (`setContext` / `getContext`) |
+| Multiple unrelated components, client-side | Global state (`.svelte.ts` module) |
+| Per-request server data (current user) | `event.locals` + load functions |
+| Data from the URL | `$page.params` or `$page.url` |
+| Data loaded from the server | Load functions (`+page.ts` / `+page.server.ts`) |
+| Form submission state | Form actions + `$page.form` |
+
+### The Context vs Global State Decision
+
+The biggest mistake is reaching for global state when context would be better. If the data is scoped to a subtree -- say, a multi-step form wizard where several child components need shared form state -- context keeps that state contained. Global state makes it accessible from anywhere, which is a wider scope than necessary and can lead to harder-to-debug interactions.
+
+```svelte
+<!-- Context is better for subtree-scoped state -->
+<!-- FormWizard.svelte -->
+<script>
+  import { setContext } from 'svelte';
+
+  const formState = $state({
+    step: 1,
+    data: {}
+  });
+
+  setContext('wizard', formState);
+</script>
+
+<!-- Only descendants of FormWizard can access this state -->
+<!-- Other components on the page cannot -->
+```
+
+```typescript
+// Global state is better for app-wide concerns
+// $lib/state/theme.svelte.ts
+class ThemeState {
+  mode = $state<'light' | 'dark'>('light');
+
+  get isDark() { return this.mode === 'dark'; }
+
+  toggle() {
+    this.mode = this.mode === 'light' ? 'dark' : 'light';
   }
 }
 
 export const theme = new ThemeState();
+// Every component in the app can access this — appropriate scope
 ```
 
-### Gotcha: Hydration Flash
+Another consideration: **can there be multiple instances?** A dashboard page might display multiple embedded widgets, each with its own state. If you use global state, all widgets share one state object -- which is wrong. Context creates separate state per widget subtree.
 
-When you restore state from `localStorage` in the constructor, the server renders with the default value (e.g., "system" / light theme), but the client may hydrate with "dark". This causes a flash of wrong content — the page briefly appears in light mode before switching to dark.
+## Complete Example: Auth + Cart + Notification Architecture
+
+Here is how a production application wires together multiple global state modules:
 
 ```typescript
-// WRONG: Causes a hydration flash
-class ThemeState {
-  #mode = $state<Theme>('light'); // Server renders "light"
-  constructor() {
-    if (browser) {
-      this.#mode = localStorage.getItem('theme') as Theme ?? 'light';
-      // Client switches to "dark" — flash!
-    }
-  }
+// src/lib/state/auth.svelte.ts — User identity
+class AuthState {
+  #user = $state<User | null>(null);
+  get user() { return this.#user; }
+  get isLoggedIn() { return this.#user !== null; }
+  get isAdmin() { return this.#user?.role === 'admin'; }
+  setUser(user: User) { this.#user = user; }
+  clearUser() { this.#user = null; }
 }
-
-// BETTER: Use a cookie so the server knows the theme
-// src/hooks.server.ts
-export const handle: Handle = async ({ event, resolve }) => {
-  const theme = event.cookies.get('theme') ?? 'light';
-  return resolve(event, {
-    transformPageChunk: ({ html }) =>
-      html.replace('%sveltekit.body%', `<div class="${theme}">%sveltekit.body%</div>`)
-  });
-};
+export const auth = new AuthState();
 ```
 
-The cookie approach lets the server know the user's theme preference and render the correct class from the first byte, eliminating the flash entirely.
-
-## Derived State Across Modules
-
-Sometimes global state depends on other global state. Use `$derived` at the module level in `.svelte.ts` files:
-
 ```typescript
-// src/lib/state/cart.svelte.ts
+// src/lib/state/cart.svelte.ts — Shopping cart
 class CartState {
-  items = $state<CartItem[]>([]);
-  get totalPrice() {
-    return this.items.reduce((sum, i) => sum + i.price * i.quantity, 0);
-  }
+  #items = $state<CartItem[]>([]);
+  get items(): ReadonlyArray<CartItem> { return this.#items; }
+  get totalItems() { return this.#items.reduce((s, i) => s + i.quantity, 0); }
+  get totalPrice() { return this.#items.reduce((s, i) => s + i.price * i.quantity, 0); }
+  get isEmpty() { return this.#items.length === 0; }
+  add(product: Product) { /* ... */ }
+  remove(id: number) { /* ... */ }
+  clear() { this.#items = []; }
 }
 export const cart = new CartState();
-
-// src/lib/state/checkout.svelte.ts
-import { cart } from './cart.svelte';
-
-class CheckoutState {
-  #shippingMethod = $state<'standard' | 'express'>('standard');
-  #couponDiscount = $state(0);
-
-  get shippingMethod() { return this.#shippingMethod; }
-
-  get shippingCost(): number {
-    return this.#shippingMethod === 'express' ? 15.99 : 5.99;
-  }
-
-  get subtotal(): number {
-    return cart.totalPrice;
-  }
-
-  get discount(): number {
-    return this.#couponDiscount;
-  }
-
-  get total(): number {
-    return Math.max(0, this.subtotal + this.shippingCost - this.#couponDiscount);
-  }
-
-  setShipping(method: 'standard' | 'express') {
-    this.#shippingMethod = method;
-  }
-
-  applyCoupon(discount: number) {
-    this.#couponDiscount = Math.max(0, discount);
-  }
-
-  removeCoupon() {
-    this.#couponDiscount = 0;
-  }
-}
-
-export const checkout = new CheckoutState();
 ```
 
-The `checkout.total` getter reads `cart.totalPrice`, which reads `cart.items`. Svelte's reactivity graph tracks this entire chain. When you add an item to the cart, `checkout.total` automatically reflects the new price. No manual wiring, no subscriptions, no event emitters.
-
-### Gotcha: Circular Dependencies
-
-Be careful not to create circular imports between state modules. If `cart.svelte.ts` imports from `checkout.svelte.ts` and `checkout.svelte.ts` imports from `cart.svelte.ts`, you will get undefined values at module initialization time.
-
 ```typescript
-// WRONG: Circular dependency
-// cart.svelte.ts
-import { checkout } from './checkout.svelte'; // checkout imports cart too!
-
-// CORRECT: One-directional dependency
-// checkout.svelte.ts imports from cart.svelte.ts, but NOT the reverse.
-// If both need shared data, extract it to a third module.
-```
-
-## Resettable State for Testing
-
-Global state is persistent — it survives across component mounts and page navigations. This is usually what you want, but it makes testing tricky. Each test needs a clean slate.
-
-```typescript
-// src/lib/state/notifications.svelte.ts
-
-type NotificationType = 'info' | 'success' | 'warning' | 'error';
-
-interface Notification {
-  id: string;
-  message: string;
-  type: NotificationType;
-  createdAt: number;
-}
-
+// src/lib/state/notifications.svelte.ts — Toast messages
 class NotificationState {
   #items = $state<Notification[]>([]);
-  #nextId = 0;
-
-  get all(): Notification[] {
-    return this.#items;
-  }
-
-  get recent(): Notification[] {
-    return this.#items.slice(-5);
-  }
-
-  get count(): number {
-    return this.#items.length;
-  }
-
-  get hasErrors(): boolean {
-    return this.#items.some(n => n.type === 'error');
-  }
-
-  add(message: string, type: NotificationType = 'info') {
-    const notification: Notification = {
-      id: `notif-${this.#nextId++}`,
-      message,
-      type,
-      createdAt: Date.now()
-    };
-    this.#items.push(notification);
-
-    // Auto-dismiss non-error notifications after 5 seconds
-    if (type !== 'error') {
-      setTimeout(() => this.dismiss(notification.id), 5000);
-    }
-  }
-
-  dismiss(id: string) {
-    this.#items = this.#items.filter(n => n.id !== id);
-  }
-
-  dismissAll() {
-    this.#items = [];
-  }
-
-  // Critical for testing — reset to initial state
-  _reset() {
-    this.#items = [];
-    this.#nextId = 0;
-  }
+  get visible() { return this.#items.slice(0, 5); }
+  info(message: string) { /* ... */ }
+  success(message: string) { /* ... */ }
+  error(message: string) { /* ... */ }
+  dismiss(id: string) { /* ... */ }
+  clear() { this.#items = []; }
 }
-
 export const notifications = new NotificationState();
 ```
 
-```typescript
-// In your test file:
-import { notifications } from '$lib/state/notifications.svelte';
-import { beforeEach, describe, it, expect } from 'vitest';
-
-describe('NotificationState', () => {
-  beforeEach(() => {
-    notifications._reset(); // Clean slate for each test
-  });
-
-  it('adds a notification', () => {
-    notifications.add('Hello', 'info');
-    expect(notifications.count).toBe(1);
-  });
-
-  it('starts empty (not affected by previous test)', () => {
-    expect(notifications.count).toBe(0);
-  });
-});
-```
-
-The underscore prefix on `_reset()` is a convention signaling "this is for testing, not for production use." TypeScript cannot enforce this at the type level, but the naming makes the intent clear.
-
-## When NOT to Use Global State
-
-Global state is not always the answer. Here is a comprehensive decision framework:
-
-| Scenario | Right tool | Why |
-|----------|-----------|-----|
-| Only one component uses this data | Local `$state` in the component | Simplest solution; no indirection |
-| Parent and its descendants share data | Context API (`setContext` / `getContext`) | Scoped to a subtree; won't pollute other trees |
-| Multiple unrelated components, client-side | Global state (`.svelte.ts` module) | Shared singleton is the right abstraction |
-| Per-request server data (current user) | `event.locals` + load functions | Safe from cross-request pollution |
-| Data from the URL | `page.params` or `page.url` from `$app/state` | Already reactive; no duplication needed |
-| Data loaded from the server | Load functions (`+page.ts` / `+page.server.ts`) | SSR-compatible; proper caching |
-| Data that multiple subtrees need independently | Context with factory | Each subtree gets its own instance |
-| Form state for a multi-step wizard | Context or local state in the wizard root | Scoped to the wizard's lifetime |
-| Server-to-client real-time data | SSE/WebSocket + local state | Global state cannot subscribe to external sources on its own |
-
-### The Biggest Mistake: Global State Instead of Context
-
-The biggest mistake is reaching for global state when context would be better. If the data is scoped to a subtree — say, a multi-step form wizard where several child components need shared form state — context keeps that state contained. Global state makes it accessible from anywhere, which is a wider scope than necessary and can lead to harder-to-debug interactions.
-
 ```svelte
-<!-- WRONG: Global state for a form wizard -->
+<!-- src/routes/+layout.svelte — Wires everything together -->
 <script>
-  // Any component anywhere can read/write wizard state
-  import { wizard } from '$lib/state/wizard.svelte';
+  import { auth } from '$lib/state/auth.svelte';
+  import NavBar from '$lib/components/NavBar.svelte';
+  import Footer from '$lib/components/Footer.svelte';
+  import ToastContainer from '$lib/components/ToastContainer.svelte';
+
+  let { data, children } = $props();
+
+  // Sync server auth to client auth state
+  $effect(() => {
+    data.user ? auth.setUser(data.user) : auth.clearUser();
+  });
 </script>
 
-<!-- CORRECT: Context scoped to the wizard subtree -->
-<script>
-  import { getContext } from 'svelte';
-  // Only components inside the wizard tree can access this
-  const wizard = getContext('wizard');
-</script>
+<div class="app">
+  <NavBar />
+  <main>{@render children()}</main>
+  <Footer />
+  <ToastContainer />
+</div>
 ```
 
-Context also solves the "multiple instances" problem. If your page has two independent form wizards, context gives each its own state automatically. Global state would require manual instance management.
-
-## Real-World Architecture: State Organization
-
-For a production app, organize your global state modules by domain:
-
-```
-src/lib/state/
-├── auth.svelte.ts          # Authentication state
-├── cart.svelte.ts           # Shopping cart
-├── checkout.svelte.ts       # Checkout flow (imports cart)
-├── notifications.svelte.ts  # Toast notifications
-├── theme.svelte.ts          # Light/dark/system theme
-└── feature-flags.svelte.ts  # Feature toggle state
-```
-
-Each module is independent and focused on one domain. Cross-module dependencies are one-directional (checkout depends on cart, not the reverse). Each module exports a single class instance.
-
-### Performance: How Much Global State Is Too Much?
-
-Svelte's signal-based reactivity is fine-grained. Reading `cart.totalItems` in a template subscribes only to that specific computation. Changing `theme.mode` does not re-render components that only read `cart.totalItems`. There is no "re-render the world" problem.
-
-That said, avoid storing large, frequently-changing data in global state:
-
-```typescript
-// WRONG: Storing the full mouse position globally
-// Updates 60+ times per second, every component reading it re-evaluates
-class MouseState {
-  x = $state(0);
-  y = $state(0);
-}
-export const mouse = new MouseState();
-
-// CORRECT: Mouse position is usually local to one component
-// If you truly need it globally, debounce or throttle updates
-```
-
-The performance impact depends on how many components subscribe to the changing value. One component reading `mouse.x` is fine. Fifty components all re-rendering on every mouse move is a problem.
-
-## Debugging Global State
-
-When state behaves unexpectedly, add temporary `$effect` blocks to trace reads and writes:
-
-```typescript
-// Temporary debugging — remove before shipping!
-$effect(() => {
-  console.log('Cart items changed:', cart.items.length, cart.items);
-});
-
-$effect(() => {
-  console.log('Auth state changed:', auth.isLoggedIn, auth.user?.email);
-});
-```
-
-For more structured debugging, add a `toJSON()` method to your state classes:
-
-```typescript
-class CartState {
-  items = $state<CartItem[]>([]);
-
-  // ... other methods ...
-
-  toJSON() {
-    return {
-      items: this.items,
-      totalItems: this.totalItems,
-      totalPrice: this.totalPrice,
-      isEmpty: this.isEmpty
-    };
-  }
-}
-
-// In the browser console:
-// JSON.stringify(cart.toJSON(), null, 2)
-```
+Each state module is independent. Components import only what they need. The navbar imports `auth` and `cart`. The toast container imports `notifications`. Product pages import `cart` and `notifications`. No component needs to know about the others' state -- they interact through the shared modules.
 
 ## Try It
 
-1. Create a global theme state in `$lib/state/theme.svelte.ts` using the class pattern. Include a private `#mode` property (`'light' | 'dark' | 'system'`), a `toggle()` method, a `cycle()` method that rotates through all three modes, and a derived `isDark` getter that checks `window.matchMedia` for system mode. Persist the choice to `localStorage`. Use it from both a header component and a settings page to verify they stay in sync.
+1. Create a global theme state in `$lib/state/theme.svelte.ts` using the class pattern. Include a `mode` property (`'light'` or `'dark'`), a `toggle()` method, a derived `isDark` getter, and persistence to localStorage with `$app/environment` checks. Use it from both a header component and a settings page to verify they stay in sync.
 
-2. Create a notification system as a global state class. It should support `add(message, type)` where type is `'info' | 'error' | 'success' | 'warning'`, `dismiss(id)`, auto-dismissal after 5 seconds for non-error notifications, and a `recent` getter that returns only the last 5 notifications. Include a `_reset()` method for testing. Use it from a form component (to add notifications on submit) and a toast container component (to display and dismiss them).
+2. Create a notification system as a global state class. It should support `add(message, type)` where type is `'info' | 'error' | 'success'`, `dismiss(id)`, auto-dismissal after 5 seconds, and a `visible` getter that returns only the last 5 notifications. Build a ToastContainer component that displays them with Svelte transitions. Use it from a form component (to add notifications) and verify the toasts appear and auto-dismiss.
 
-3. Build a global `FavoritesState` class that tracks favorited product IDs. Include `toggle(id)`, `isFavorited(id)`, and a `count` getter. Persist to `localStorage`. Use it from a product card component (to toggle the heart icon) and a favorites page (to list all favorites).
+3. Create a cart state class with private `#` fields, validation (max quantity 99 per item, no negative quantities), computed totals (totalItems, totalPrice, formattedTotal), and a `clear()` method. Write unit tests using Vitest that test adding, removing, quantity validation, duplicate handling, and total computation. Remember to reset the state in `beforeEach`.
 
-4. Think about this: you are building a dashboard with multiple tabs, each loaded lazily. Each tab needs access to the currently selected date range filter. Should this be global state, context, or props? What changes if the dashboard can be embedded multiple times on the same page? Write out the reasoning for each scenario.
-
-5. Refactor scenario: you have a global `formState` used by a multi-step wizard. Two independent wizards on the same page are conflicting because they share the same state. Redesign using context so each wizard gets its own state instance. What changes in the component code?
+4. Think about this: you are building a dashboard with multiple tabs, each loaded lazily. Each tab needs access to the currently selected date range filter. Should this be global state, context, or props? What changes if the dashboard can be embedded multiple times on the same page?
 
 ## Key Takeaways
 
-- Global state lives in `.svelte.ts` files and is shared across all components that import it — JavaScript module singletons are the mechanism
-- The `.svelte.ts` extension is required because the Svelte compiler must process the runes — plain `.ts` files cannot use `$state`, `$derived`, or `$effect`
-- Export getter functions (not raw primitive variables) to maintain reactivity across module boundaries — the compiler needs a function call to track the dependency
-- Classes with `$state` fields, private fields (`#`), and `get` accessors are the cleanest pattern for complex shared state — they provide encapsulation, derived values, and a cohesive API
-- On the server, module-level state is shared across all requests — this is a security vulnerability for per-user data; use `event.locals` and load functions instead
-- Client-only state (cart, theme, favorites) is safe as module singletons because each browser tab runs its own JavaScript runtime
-- Persist state to `localStorage` when it should survive page refreshes, but guard with `browser` checks and handle corrupted data
-- Watch for hydration flashes when restoring state from `localStorage` — consider using cookies so the server can render the correct initial state
-- Use context for tree-scoped state, global state for app-wide state, and load functions for server-loaded data
-- Avoid circular dependencies between state modules — keep the dependency graph one-directional
-- Include `_reset()` methods on state classes to enable clean test isolation
-- Svelte's fine-grained reactivity means global state is performant — reading `cart.totalItems` does not re-render components that only read `theme.mode`
+- Global state lives in `.svelte.ts` files and is shared across all components that import it -- JavaScript module singletons guarantee one instance
+- The `.svelte.ts` extension is required because the Svelte compiler must process the runes -- plain `.ts` files cannot use `$state`, `$derived`, or `$effect`
+- **Export getter functions** (not raw primitive variables) to maintain reactivity across module boundaries -- the compiler needs a function call to instrument the signal read
+- **Classes with `$state` fields and `get` accessors** are the cleanest pattern for complex shared state -- they provide encapsulation, validation, computed properties, and a clear API
+- **Private `$state` fields** (`#field`) work in Svelte 5 and prevent external code from bypassing validation
+- On the server, **module-level state is shared across all requests** -- this is a security risk for per-user data that can leak one user's information to another
+- Use `event.locals` + load functions for per-request server data, and sync to client-side global state in a layout component with `$effect`
+- The `browser` check from `$app/environment` guards against server-side access to browser-only APIs like `localStorage`
+- Use **context** for tree-scoped state (multi-step forms, embedded widgets), **global state** for app-wide state (theme, cart, notifications), and **load functions** for server-loaded data
+- Every state class should have a `clear()` or `reset()` method for testing -- module-level state persists across tests in Vitest
+- State initialization can be lazy (init on first read) to avoid accessing browser APIs during SSR
+- JavaScript module singletons ensure one instance of state exists for the entire client-side app -- but this same singleton behavior is what makes server-side state pollution dangerous

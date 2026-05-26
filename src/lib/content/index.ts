@@ -248,6 +248,18 @@ export const courseModules: Module[] = [
 		]
 	},
 	{
+		slug: '19b-file-uploads',
+		number: 54,
+		title: 'File Uploads & Media',
+		description: 'Multipart uploads, drag-and-drop, presigned URLs, and image optimization.',
+		phase: 3,
+		lessons: [
+			{ slug: '01-upload-fundamentals', number: 1, title: 'Upload Fundamentals', description: 'File API, drag-and-drop, client-side preview and validation.', hasEditor: false },
+			{ slug: '02-server-handling', number: 2, title: 'Server-Side File Handling', description: 'Form actions with files, streaming, S3/R2 presigned URLs.', hasEditor: false },
+			{ slug: '03-image-optimization', number: 3, title: 'Image Optimization & Advanced Patterns', description: 'Responsive images, progressive upload, chunked transfers.', hasEditor: false }
+		]
+	},
+	{
 		slug: '20-authentication',
 		number: 20,
 		title: 'Authentication',
@@ -360,13 +372,25 @@ export const courseModules: Module[] = [
 	{
 		slug: '29-accessibility',
 		number: 29,
-		title: 'Accessibility & i18n',
-		description: 'ARIA, keyboard nav, and internationalization.',
+		title: 'Accessibility',
+		description: 'ARIA, keyboard nav, and auditing.',
 		phase: 4,
 		lessons: [
 			{ slug: '01-a11y-basics', number: 1, title: 'Accessibility Basics', description: 'WCAG, ARIA, and semantic HTML.', hasEditor: false },
 			{ slug: '02-keyboard-nav', number: 2, title: 'Keyboard Navigation', description: 'Focus management and keyboard handlers.', hasEditor: false },
 			{ slug: '03-testing-a11y', number: 3, title: 'Testing Accessibility', description: 'Lighthouse, axe-core, and auditing.', hasEditor: false }
+		]
+	},
+	{
+		slug: '29b-i18n',
+		number: 55,
+		title: 'Internationalization (i18n)',
+		description: 'Locale routing, message catalogs, pluralization, and RTL support.',
+		phase: 4,
+		lessons: [
+			{ slug: '01-i18n-fundamentals', number: 1, title: 'i18n Fundamentals', description: 'Locale detection, message catalogs, ICU MessageFormat, and pluralization.', hasEditor: false },
+			{ slug: '02-sveltekit-i18n', number: 2, title: 'SvelteKit i18n with Paraglide', description: 'Paraglide-js, locale routing, language switcher, and SEO hreflang.', hasEditor: false },
+			{ slug: '03-advanced-i18n', number: 3, title: 'Formatting, RTL & Translation Workflows', description: 'Date/number formatting, RTL layout, content extraction, and CI pipelines.', hasEditor: false }
 		]
 	},
 	{

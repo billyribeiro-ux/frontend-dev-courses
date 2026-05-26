@@ -1,865 +1,1399 @@
 # Contact Form Project
 
-It is time to put everything together. In this project, you will build a complete **contact form** with real-time validation and a live preview. This combines nearly every concept you have learned: HTML form elements, CSS styling, `$state()`, `$derived()`, `bind:value`, `{#if}` blocks, and component structure.
+It is time to put everything together. In this project, you will build a complete **multi-step registration form** with real-time validation, file upload with preview, draft persistence, and full accessibility. This combines nearly every concept you have learned: HTML form elements, CSS styling, `$state()`, `$derived()`, `$effect()`, `bind:value`, `{#if}` blocks, component structure, and progressive enhancement with SvelteKit form actions.
 
-This is the kind of form you will build over and over in real-world projects — signing up users, collecting feedback, processing orders. Nail this pattern and you are ready for anything.
-
-But we are not just building a form that works. We are building one the *right* way — with validation patterns that scale, error UX that respects the user, and code structure that a team can maintain. Along the way, you will learn the mental models that separate a junior form implementation from a production-grade one.
+This is the kind of form you will build over and over in real-world projects — signing up users, collecting feedback, processing orders, onboarding workflows. Nail this pattern and you are ready for anything.
 
 ## The Goal
 
-We are building a contact form with:
-1. Name, email, and message fields
-2. A subject dropdown
-3. Validation that shows errors as the user types (but only after they interact with a field)
-4. A live preview panel that shows what will be submitted
-5. A submit button that is disabled until the form is valid
-6. A success state after submission with a reset option
-7. Responsive layout that works on mobile
+We are building a multi-step registration form with:
+1. **Step 1**: Personal information (name, email, password) with real-time validation
+2. **Step 2**: Profile details (avatar upload with preview, bio, website)
+3. **Step 3**: Preferences (notification settings, timezone, newsletter opt-in)
+4. **Step 4**: Review and confirm — a preview of all entered data
+5. Step navigation with validation gates — you cannot advance past an invalid step
+6. Form draft persistence via `localStorage` — reload the page and your data survives
+7. Accessible error announcements and focus management
+8. Server-side validation with Zod schemas
+9. Progressive enhancement with `use:enhance`
 
-## The Mental Model: Form State Machines
+## Step 1: Form State Architecture
 
-Before writing code, understand that every form field is a tiny state machine with three states:
-
-```
-PRISTINE ──(user types)──▶ DIRTY + VALID
-                            │
-                            └──▶ DIRTY + INVALID
-```
-
-- **Pristine**: the user has not interacted with this field yet. Do not show errors — it is rude to show "Name is required" before the user has even tried.
-- **Dirty + Valid**: the user has entered something, and it passes validation. Show positive feedback (green border, checkmark).
-- **Dirty + Invalid**: the user has entered something, but it fails validation. Now show the error — the user has demonstrated intent, and the feedback is helpful, not annoying.
-
-This "touched" or "dirty" tracking is what separates a professional form from one that screams errors the moment the page loads. Libraries like Formik, React Hook Form, and Zod all have this concept built in. In Svelte, we build it ourselves because it is simple and instructive.
-
-## Step 1: Form State
-
-Start by defining all the state your form needs. Notice that we track both the value and whether the field has been touched:
+The first architectural decision is how to organize state. With a multi-step form, you need state that is structured by step but accessible across all steps for the review page. A flat object with clear grouping works better than separate variables:
 
 ```svelte
-<script>
-  // Form field values
-  let name = $state("");
-  let email = $state("");
-  let subject = $state("");
-  let message = $state("");
-  let submitted = $state(false);
+<script lang="ts">
+  import { onMount } from 'svelte';
 
-  // "Touched" tracking — has the user interacted with this field?
-  let nameTouched = $state(false);
-  let emailTouched = $state(false);
-  let messageTouched = $state(false);
+  // Form data organized by step
+  let personal = $state({
+    firstName: '',
+    lastName: '',
+    email: '',
+    password: '',
+    confirmPassword: ''
+  });
+
+  let profile = $state({
+    avatar: null as File | null,
+    avatarPreview: '' as string,
+    bio: '',
+    website: ''
+  });
+
+  let preferences = $state({
+    notifications: 'email' as 'email' | 'push' | 'none',
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    newsletter: false,
+    marketingEmails: false
+  });
+
+  // Form UI state
+  let currentStep = $state(1);
+  let totalSteps = 4;
+  let submitting = $state(false);
+  let submitted = $state(false);
+  let serverErrors = $state<Record<string, string>>({});
+
+  // Track which fields the user has interacted with (touched)
+  // Only show validation errors after a field has been touched
+  let touched = $state<Set<string>>(new Set());
+
+  function touch(field: string) {
+    touched = new Set([...touched, field]);
+  }
 </script>
 ```
 
-Why separate `touched` state instead of just checking `name.length > 0`? Because a user might type a character, then delete it. The field is now empty, but the user *has* interacted with it. Showing "Name is required" at this point is appropriate — they tried and removed their input.
+The `touched` set is a critical UX pattern. Without it, the form shows errors before the user has typed anything — "Email is required" on a blank form is annoying, not helpful. By tracking which fields have been interacted with, we only show errors for fields the user has actually visited and left.
 
 ## Step 2: Validation with $derived()
 
-Use derived state to compute validation status in real time. This is the core insight: **validation rules are derived from field values, not computed imperatively.** You declare what "valid" means, and Svelte keeps everything in sync automatically.
+Validation rules live in `$derived` computations. They update automatically as the user types, with zero manual wiring:
 
 ```svelte
-<script>
-  let name = $state("");
-  let email = $state("");
-  let subject = $state("");
-  let message = $state("");
-  let submitted = $state(false);
-
-  let nameTouched = $state(false);
-  let emailTouched = $state(false);
-  let messageTouched = $state(false);
-
-  // Validation rules — each is a pure function of the field value
-  let nameValid = $derived(name.trim().length >= 2);
-  // Simple email check for learning purposes — production apps use a library
-  let emailValid = $derived(email.includes("@") && email.includes("."));
-  let subjectValid = $derived(subject !== "");
-  let messageValid = $derived(message.trim().length >= 10);
-
-  // Overall form validity — ALL fields must pass
-  let formValid = $derived(nameValid && emailValid && subjectValid && messageValid);
-
-  // Character count — updates live as the user types
-  let messageLength = $derived(message.trim().length);
-
-  // Error messages — only shown when the field is touched AND invalid
-  let nameError = $derived(
-    nameTouched && !nameValid ? "Name must be at least 2 characters." : ""
-  );
-  let emailError = $derived(
-    emailTouched && !emailValid ? "Please enter a valid email address." : ""
-  );
-  let messageError = $derived(
-    messageTouched && !messageValid ? "Message must be at least 10 characters." : ""
+<script lang="ts">
+  // === Personal Info Validation ===
+  let firstNameError = $derived(
+    personal.firstName.trim().length === 0
+      ? 'First name is required'
+      : personal.firstName.trim().length < 2
+        ? 'Must be at least 2 characters'
+        : personal.firstName.trim().length > 50
+          ? 'Must be under 50 characters'
+          : null
   );
 
-  function handleSubmit(event) {
-    event.preventDefault();
-    if (formValid) {
-      submitted = true;
+  let lastNameError = $derived(
+    personal.lastName.trim().length === 0
+      ? 'Last name is required'
+      : personal.lastName.trim().length < 2
+        ? 'Must be at least 2 characters'
+        : null
+  );
+
+  let emailError = $derived(() => {
+    if (personal.email.length === 0) return 'Email is required';
+    // RFC 5322 simplified — catches 99% of real email formats
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(personal.email)) return 'Enter a valid email address';
+    return null;
+  });
+
+  let passwordError = $derived(() => {
+    if (personal.password.length === 0) return 'Password is required';
+    if (personal.password.length < 8) return 'Must be at least 8 characters';
+    if (!/[A-Z]/.test(personal.password)) return 'Must include an uppercase letter';
+    if (!/[a-z]/.test(personal.password)) return 'Must include a lowercase letter';
+    if (!/[0-9]/.test(personal.password)) return 'Must include a number';
+    return null;
+  });
+
+  let confirmPasswordError = $derived(
+    personal.confirmPassword.length === 0
+      ? 'Please confirm your password'
+      : personal.confirmPassword !== personal.password
+        ? 'Passwords do not match'
+        : null
+  );
+
+  // Password strength indicator
+  let passwordStrength = $derived(() => {
+    const p = personal.password;
+    if (p.length === 0) return { score: 0, label: '' };
+
+    let score = 0;
+    if (p.length >= 8) score++;
+    if (p.length >= 12) score++;
+    if (/[A-Z]/.test(p) && /[a-z]/.test(p)) score++;
+    if (/[0-9]/.test(p)) score++;
+    if (/[^A-Za-z0-9]/.test(p)) score++;
+
+    const labels = ['Very Weak', 'Weak', 'Fair', 'Strong', 'Very Strong'];
+    return { score, label: labels[Math.min(score, labels.length) - 1] || 'Very Weak' };
+  });
+
+  // === Profile Validation ===
+  let bioError = $derived(
+    profile.bio.length > 500 ? `Bio must be under 500 characters (${profile.bio.length}/500)` : null
+  );
+
+  let websiteError = $derived(() => {
+    if (profile.website.length === 0) return null; // Optional field
+    try {
+      new URL(profile.website);
+      return null;
+    } catch {
+      return 'Must be a valid URL (include https://)';
+    }
+  });
+
+  let avatarError = $derived(() => {
+    if (!profile.avatar) return null; // Optional
+    if (profile.avatar.size > 5 * 1024 * 1024) return 'Image must be under 5MB';
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(profile.avatar.type)) {
+      return 'Must be JPEG, PNG, or WebP';
+    }
+    return null;
+  });
+
+  // === Step Validity ===
+  let step1Valid = $derived(
+    !firstNameError && !lastNameError && !emailError && !passwordError && !confirmPasswordError
+  );
+
+  let step2Valid = $derived(!bioError && !websiteError && !avatarError);
+
+  let step3Valid = $derived(true); // Preferences are always valid (all have defaults)
+
+  let formValid = $derived(step1Valid && step2Valid && step3Valid);
+
+  // Check if a specific step is valid (used for navigation gates)
+  function isStepValid(step: number): boolean {
+    switch (step) {
+      case 1: return step1Valid;
+      case 2: return step2Valid;
+      case 3: return step3Valid;
+      default: return true;
     }
   }
 
-  function resetForm() {
-    name = "";
-    email = "";
-    subject = "";
-    message = "";
-    submitted = false;
-    nameTouched = false;
-    emailTouched = false;
-    messageTouched = false;
-  }
+  // Character counters
+  let bioLength = $derived(profile.bio.trim().length);
 </script>
 ```
 
-### WRONG vs CORRECT: Validation Approaches
+Notice the validation functions return `null` for valid fields and an error string for invalid ones. This pattern makes conditional rendering clean: `{#if error && touched.has(field)}` shows the error only when it exists AND the user has interacted with the field.
+
+## Step 3: Step Navigation with Validation Gates
+
+The step navigation prevents users from advancing past invalid steps while allowing them to go back freely:
 
 ```svelte
-<script>
-  // WRONG: Imperative validation — checking in the submit handler only
-  // The user gets no feedback until they try to submit
-  function handleSubmit() {
-    let errors = [];
-    if (name.length < 2) errors.push("Name too short");
-    if (!email.includes("@")) errors.push("Invalid email");
-    if (errors.length > 0) {
-      alert(errors.join("\n")); // Terrible UX
+<script lang="ts">
+  // Attempt to go to the next step — only if current step is valid
+  function nextStep() {
+    // Touch all fields in the current step so errors become visible
+    touchAllFieldsInStep(currentStep);
+
+    if (!isStepValid(currentStep)) {
+      // Focus the first invalid field
+      announceError('Please fix the errors before continuing');
+      focusFirstError();
       return;
     }
-    submitted = true;
+
+    if (currentStep < totalSteps) {
+      currentStep++;
+      // Focus the first field in the new step for keyboard users
+      requestAnimationFrame(() => {
+        const firstInput = document.querySelector<HTMLElement>(
+          `[data-step="${currentStep}"] input, [data-step="${currentStep}"] select, [data-step="${currentStep}"] textarea`
+        );
+        firstInput?.focus();
+      });
+    }
   }
 
-  // WRONG: Using $effect to set validation state
-  // Effects are for side effects (DOM, network), not derived data
-  let nameValid = $state(false);
-  $effect(() => {
-    nameValid = name.trim().length >= 2; // This works but is wrong pattern
-  });
+  function prevStep() {
+    if (currentStep > 1) {
+      currentStep--;
+    }
+  }
 
-  // CORRECT: Declarative validation with $derived
-  // Validation is derived data — it is a pure function of the field value
-  // Svelte computes it automatically whenever the field changes
-  let nameValid = $derived(name.trim().length >= 2);
+  // Go to a specific step (from the progress bar)
+  function goToStep(step: number) {
+    // Can always go back, but can only go forward if all previous steps are valid
+    if (step < currentStep) {
+      currentStep = step;
+      return;
+    }
+
+    // Validate all steps up to the target
+    for (let s = 1; s < step; s++) {
+      if (!isStepValid(s)) {
+        touchAllFieldsInStep(s);
+        currentStep = s;
+        announceError(`Please complete Step ${s} first`);
+        return;
+      }
+    }
+
+    currentStep = step;
+  }
+
+  function touchAllFieldsInStep(step: number) {
+    const fieldsByStep: Record<number, string[]> = {
+      1: ['firstName', 'lastName', 'email', 'password', 'confirmPassword'],
+      2: ['avatar', 'bio', 'website'],
+      3: ['notifications', 'timezone', 'newsletter']
+    };
+
+    const fields = fieldsByStep[step] ?? [];
+    touched = new Set([...touched, ...fields]);
+  }
+
+  // Accessibility: announce errors to screen readers
+  let announcement = $state('');
+  function announceError(message: string) {
+    announcement = message;
+    // Clear after screen reader has time to announce
+    setTimeout(() => { announcement = ''; }, 3000);
+  }
+
+  function focusFirstError() {
+    requestAnimationFrame(() => {
+      const firstError = document.querySelector<HTMLElement>('[aria-invalid="true"]');
+      firstError?.focus();
+    });
+  }
 </script>
 ```
 
-The `$derived` approach is correct because validation IS derived state — it is a direct computation from the field value. There is no side effect, no timing issue, no stale state. When `name` changes, `nameValid` updates synchronously in the same microtask.
+The `requestAnimationFrame` calls are important — they wait for Svelte to finish updating the DOM before trying to find and focus elements. Without this, you might focus an element that does not exist yet or has stale ARIA attributes.
 
-### Why Not $effect for Validation?
+## Step 4: File Upload with Preview
 
-This is a common mistake that deserves a deeper explanation:
+File uploads need special handling. The `<input type="file">` does not support `bind:value` (for security reasons — scripts cannot set a file input's value). Instead, listen for the `change` event and read the file:
 
 ```svelte
-<script>
-  let name = $state("");
+<script lang="ts">
+  function handleAvatarChange(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
 
-  // WRONG: $effect creates a timing gap between the value changing
-  // and the validation updating. During that gap, you could read
-  // stale validation state.
-  let nameValid = $state(false);
-  $effect(() => {
-    nameValid = name.trim().length >= 2;
-  });
-  // Between name changing and the effect running, nameValid is STALE.
-  // If another $derived reads nameValid, it might get the wrong value.
+    if (!file) {
+      profile.avatar = null;
+      profile.avatarPreview = '';
+      return;
+    }
 
-  // CORRECT: $derived is synchronous — no gap, no stale state
-  let nameValid = $derived(name.trim().length >= 2);
-  // nameValid is ALWAYS consistent with name. No gap. No stale state.
+    profile.avatar = file;
+
+    // Create a preview URL for the image
+    // This is a blob URL that points to the file in memory
+    if (profile.avatarPreview) {
+      URL.revokeObjectURL(profile.avatarPreview); // Clean up the old preview
+    }
+    profile.avatarPreview = URL.createObjectURL(file);
+    touch('avatar');
+  }
+
+  function removeAvatar() {
+    profile.avatar = null;
+    if (profile.avatarPreview) {
+      URL.revokeObjectURL(profile.avatarPreview);
+      profile.avatarPreview = '';
+    }
+    // Reset the file input so the same file can be selected again
+    const input = document.getElementById('avatar') as HTMLInputElement;
+    if (input) input.value = '';
+  }
 </script>
 ```
 
-The rule of thumb: if the computation is a pure function of other state (no side effects), use `$derived`. If it needs to interact with the outside world (DOM manipulation, network calls, timers), use `$effect`.
+The `URL.createObjectURL()` call creates a temporary URL that points to the file in the browser's memory. It is efficient (no base64 encoding, no server round-trip) but must be cleaned up with `URL.revokeObjectURL()` when no longer needed to prevent memory leaks.
 
-## Step 3: The Form Markup
+## Step 5: Form Draft Persistence
 
-Build the form with bound inputs and validation messages. Pay attention to the accessibility details — every input has a label, errors are associated with their fields, and the form structure is semantic:
+Users filling out long forms hate losing their progress. Persist the draft to `localStorage` so it survives page refreshes, accidental navigations, and browser crashes:
+
+```svelte
+<script lang="ts">
+  const STORAGE_KEY = 'registration-draft';
+
+  // Load saved draft on mount
+  onMount(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const draft = JSON.parse(saved);
+        // Restore each section — merge with defaults so new fields are not undefined
+        personal = { ...personal, ...draft.personal };
+        // Do NOT restore passwords from localStorage (security)
+        personal.password = '';
+        personal.confirmPassword = '';
+        preferences = { ...preferences, ...draft.preferences };
+        profile.bio = draft.profile?.bio ?? '';
+        profile.website = draft.profile?.website ?? '';
+        // Cannot restore file uploads — they don't serialize
+        currentStep = draft.currentStep ?? 1;
+      } catch {
+        // Corrupted data — ignore silently
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    }
+  });
+
+  // Auto-save draft whenever form data changes
+  $effect(() => {
+    // Access all reactive values to create dependencies
+    const draft = {
+      personal: {
+        firstName: personal.firstName,
+        lastName: personal.lastName,
+        email: personal.email
+        // Intentionally exclude passwords
+      },
+      profile: {
+        bio: profile.bio,
+        website: profile.website
+        // Cannot serialize File objects
+      },
+      preferences: { ...preferences },
+      currentStep
+    };
+
+    // Debounce the save — don't hit localStorage on every keystroke
+    const timer = setTimeout(() => {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(draft));
+    }, 500);
+
+    return () => clearTimeout(timer);
+  });
+
+  function clearDraft() {
+    localStorage.removeItem(STORAGE_KEY);
+  }
+</script>
+```
+
+Critical security detail: never persist passwords to `localStorage`. It is accessible to any JavaScript on the page (including XSS attacks) and persists even after the browser is closed. Persist the non-sensitive fields and let users re-enter passwords.
+
+The `$effect` with a `setTimeout` creates an auto-saving debounce — it waits 500ms after the last change before writing to `localStorage`. The cleanup function (`return () => clearTimeout(timer)`) cancels pending saves when the next change arrives, preventing unnecessary writes.
+
+## Step 6: The Progress Bar
+
+A progress bar shows users where they are and lets them jump to completed steps:
+
+```svelte
+<!-- Step Progress Bar -->
+<nav aria-label="Form progress" class="progress-bar">
+  {#each Array(totalSteps) as _, i}
+    {@const step = i + 1}
+    {@const stepLabels = ['Personal', 'Profile', 'Preferences', 'Review']}
+    <button
+      type="button"
+      class="step-indicator"
+      class:active={currentStep === step}
+      class:completed={step < currentStep}
+      class:disabled={step > currentStep && !isStepValid(currentStep)}
+      aria-current={currentStep === step ? 'step' : undefined}
+      aria-label="{stepLabels[i]}, Step {step} of {totalSteps}{step < currentStep ? ', completed' : ''}"
+      onclick={() => goToStep(step)}
+      disabled={step > currentStep && !isStepValid(currentStep)}
+    >
+      <span class="step-number">
+        {#if step < currentStep}
+          <!-- Checkmark for completed steps -->
+          <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16" aria-hidden="true">
+            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" />
+          </svg>
+        {:else}
+          {step}
+        {/if}
+      </span>
+      <span class="step-label">{stepLabels[i]}</span>
+    </button>
+  {/each}
+</nav>
+
+<!-- Live region for screen reader announcements -->
+<div
+  aria-live="assertive"
+  aria-atomic="true"
+  class="sr-only"
+>
+  {announcement}
+</div>
+```
+
+The `aria-live="assertive"` region announces validation errors to screen reader users. The `aria-current="step"` attribute marks the active step. These are not optional niceties — they are the difference between a form that works for everyone and one that excludes users who rely on assistive technology.
+
+## Step 7: The Form Markup
+
+Each step is a section that shows or hides based on `currentStep`. The entire form is wrapped in a single `<form>` element for progressive enhancement:
 
 ```svelte
 {#if submitted}
-  <div class="success">
-    <h2>Message Sent!</h2>
-    <p>Thank you, {name}. We will respond to {email} soon.</p>
-    <button onclick={resetForm}>Send Another</button>
+  <div class="success" role="alert">
+    <h2>Registration Complete!</h2>
+    <p>Welcome, {personal.firstName}! Check {personal.email} for a confirmation link.</p>
+    <button type="button" onclick={resetForm}>Start Over</button>
   </div>
 {:else}
   <div class="form-container">
-    <form onsubmit={handleSubmit}>
-      <h2>Contact Us</h2>
+    <form method="POST" use:enhance={handleSubmit}>
+      <h2>Create Your Account</h2>
 
-      <!-- Name field -->
-      <div class="field">
-        <label for="name">Name</label>
-        <input
-          id="name"
-          type="text"
-          bind:value={name}
-          onblur={() => nameTouched = true}
-          placeholder="Your full name"
-          class:invalid={nameTouched && !nameValid}
-          class:valid={nameTouched && nameValid}
-          aria-describedby={nameError ? "name-error" : undefined}
-          aria-invalid={nameTouched && !nameValid}
-        />
-        {#if nameError}
-          <span id="name-error" class="error" role="alert">{nameError}</span>
+      <!-- Step 1: Personal Information -->
+      {#if currentStep === 1}
+        <fieldset data-step="1">
+          <legend class="sr-only">Personal Information</legend>
+
+          <div class="field">
+            <label for="firstName">First Name <span aria-hidden="true">*</span></label>
+            <input
+              id="firstName"
+              name="firstName"
+              type="text"
+              bind:value={personal.firstName}
+              onblur={() => touch('firstName')}
+              aria-required="true"
+              aria-invalid={touched.has('firstName') && !!firstNameError}
+              aria-describedby={touched.has('firstName') && firstNameError ? 'firstName-error' : undefined}
+              autocomplete="given-name"
+              placeholder="Jane"
+            />
+            {#if touched.has('firstName') && firstNameError}
+              <span id="firstName-error" class="error" role="alert">{firstNameError}</span>
+            {/if}
+          </div>
+
+          <div class="field">
+            <label for="lastName">Last Name <span aria-hidden="true">*</span></label>
+            <input
+              id="lastName"
+              name="lastName"
+              type="text"
+              bind:value={personal.lastName}
+              onblur={() => touch('lastName')}
+              aria-required="true"
+              aria-invalid={touched.has('lastName') && !!lastNameError}
+              aria-describedby={touched.has('lastName') && lastNameError ? 'lastName-error' : undefined}
+              autocomplete="family-name"
+              placeholder="Doe"
+            />
+            {#if touched.has('lastName') && lastNameError}
+              <span id="lastName-error" class="error" role="alert">{lastNameError}</span>
+            {/if}
+          </div>
+
+          <div class="field">
+            <label for="email">Email <span aria-hidden="true">*</span></label>
+            <input
+              id="email"
+              name="email"
+              type="email"
+              bind:value={personal.email}
+              onblur={() => touch('email')}
+              aria-required="true"
+              aria-invalid={touched.has('email') && !!emailError}
+              aria-describedby={touched.has('email') && emailError ? 'email-error' : undefined}
+              autocomplete="email"
+              placeholder="jane@example.com"
+            />
+            {#if touched.has('email') && emailError}
+              <span id="email-error" class="error" role="alert">{emailError}</span>
+            {/if}
+            {#if serverErrors.email}
+              <span class="error" role="alert">{serverErrors.email}</span>
+            {/if}
+          </div>
+
+          <div class="field">
+            <label for="password">Password <span aria-hidden="true">*</span></label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              bind:value={personal.password}
+              onblur={() => touch('password')}
+              aria-required="true"
+              aria-invalid={touched.has('password') && !!passwordError}
+              aria-describedby="password-requirements {touched.has('password') && passwordError ? 'password-error' : ''}"
+              autocomplete="new-password"
+            />
+            <div id="password-requirements" class="hint">
+              8+ characters with uppercase, lowercase, and a number
+            </div>
+            {#if touched.has('password') && passwordError}
+              <span id="password-error" class="error" role="alert">{passwordError}</span>
+            {/if}
+
+            <!-- Password strength meter -->
+            {#if personal.password.length > 0}
+              <div class="strength-meter" aria-label="Password strength: {passwordStrength.label}">
+                <div
+                  class="strength-bar"
+                  style="width: {(passwordStrength.score / 5) * 100}%"
+                  class:weak={passwordStrength.score <= 2}
+                  class:fair={passwordStrength.score === 3}
+                  class:strong={passwordStrength.score >= 4}
+                ></div>
+                <span class="strength-label">{passwordStrength.label}</span>
+              </div>
+            {/if}
+          </div>
+
+          <div class="field">
+            <label for="confirmPassword">Confirm Password <span aria-hidden="true">*</span></label>
+            <input
+              id="confirmPassword"
+              name="confirmPassword"
+              type="password"
+              bind:value={personal.confirmPassword}
+              onblur={() => touch('confirmPassword')}
+              aria-required="true"
+              aria-invalid={touched.has('confirmPassword') && !!confirmPasswordError}
+              aria-describedby={touched.has('confirmPassword') && confirmPasswordError ? 'confirm-error' : undefined}
+              autocomplete="new-password"
+            />
+            {#if touched.has('confirmPassword') && confirmPasswordError}
+              <span id="confirm-error" class="error" role="alert">{confirmPasswordError}</span>
+            {/if}
+          </div>
+        </fieldset>
+      {/if}
+
+      <!-- Step 2: Profile Details -->
+      {#if currentStep === 2}
+        <fieldset data-step="2">
+          <legend class="sr-only">Profile Details</legend>
+
+          <div class="field">
+            <label for="avatar">Profile Photo (optional)</label>
+            <div class="avatar-upload">
+              {#if profile.avatarPreview}
+                <div class="avatar-preview">
+                  <img
+                    src={profile.avatarPreview}
+                    alt="Avatar preview"
+                    width={96}
+                    height={96}
+                  />
+                  <button
+                    type="button"
+                    class="remove-avatar"
+                    onclick={removeAvatar}
+                    aria-label="Remove avatar"
+                  >
+                    Remove
+                  </button>
+                </div>
+              {/if}
+              <input
+                id="avatar"
+                name="avatar"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onchange={handleAvatarChange}
+                aria-describedby="avatar-hint"
+              />
+              <span id="avatar-hint" class="hint">JPEG, PNG, or WebP. Max 5MB.</span>
+            </div>
+            {#if touched.has('avatar') && avatarError}
+              <span class="error" role="alert">{avatarError}</span>
+            {/if}
+          </div>
+
+          <div class="field">
+            <label for="bio">Bio ({bioLength}/500 characters)</label>
+            <textarea
+              id="bio"
+              name="bio"
+              bind:value={profile.bio}
+              onblur={() => touch('bio')}
+              rows="4"
+              maxlength="500"
+              aria-invalid={touched.has('bio') && !!bioError}
+              placeholder="Tell us about yourself..."
+            ></textarea>
+            {#if touched.has('bio') && bioError}
+              <span class="error" role="alert">{bioError}</span>
+            {/if}
+          </div>
+
+          <div class="field">
+            <label for="website">Website (optional)</label>
+            <input
+              id="website"
+              name="website"
+              type="url"
+              bind:value={profile.website}
+              onblur={() => touch('website')}
+              aria-invalid={touched.has('website') && !!websiteError}
+              aria-describedby={touched.has('website') && websiteError ? 'website-error' : undefined}
+              placeholder="https://yoursite.com"
+              autocomplete="url"
+            />
+            {#if touched.has('website') && websiteError}
+              <span id="website-error" class="error" role="alert">{websiteError}</span>
+            {/if}
+          </div>
+        </fieldset>
+      {/if}
+
+      <!-- Step 3: Preferences -->
+      {#if currentStep === 3}
+        <fieldset data-step="3">
+          <legend class="sr-only">Preferences</legend>
+
+          <div class="field">
+            <label for="notifications">Notification Preference</label>
+            <select
+              id="notifications"
+              name="notifications"
+              bind:value={preferences.notifications}
+            >
+              <option value="email">Email notifications</option>
+              <option value="push">Push notifications</option>
+              <option value="none">No notifications</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="timezone">Timezone</label>
+            <select id="timezone" name="timezone" bind:value={preferences.timezone}>
+              {#each Intl.supportedValuesOf('timeZone') as tz}
+                <option value={tz}>{tz.replace(/_/g, ' ')}</option>
+              {/each}
+            </select>
+          </div>
+
+          <div class="field checkbox-group">
+            <label class="checkbox-label">
+              <input
+                type="checkbox"
+                name="newsletter"
+                bind:checked={preferences.newsletter}
+              />
+              <span>Subscribe to the weekly newsletter</span>
+            </label>
+
+            <label class="checkbox-label">
+              <input
+                type="checkbox"
+                name="marketingEmails"
+                bind:checked={preferences.marketingEmails}
+              />
+              <span>Receive product updates and promotional emails</span>
+            </label>
+          </div>
+        </fieldset>
+      {/if}
+
+      <!-- Step 4: Review -->
+      {#if currentStep === 4}
+        <div data-step="4" class="review">
+          <h3>Review Your Information</h3>
+
+          <div class="review-section">
+            <h4>
+              Personal Information
+              <button type="button" class="edit-link" onclick={() => goToStep(1)}>Edit</button>
+            </h4>
+            <dl>
+              <dt>Name</dt>
+              <dd>{personal.firstName} {personal.lastName}</dd>
+              <dt>Email</dt>
+              <dd>{personal.email}</dd>
+            </dl>
+          </div>
+
+          <div class="review-section">
+            <h4>
+              Profile
+              <button type="button" class="edit-link" onclick={() => goToStep(2)}>Edit</button>
+            </h4>
+            <dl>
+              {#if profile.avatarPreview}
+                <dt>Photo</dt>
+                <dd>
+                  <img
+                    src={profile.avatarPreview}
+                    alt="Avatar"
+                    width={48}
+                    height={48}
+                    class="review-avatar"
+                  />
+                </dd>
+              {/if}
+              <dt>Bio</dt>
+              <dd>{profile.bio || '(not set)'}</dd>
+              <dt>Website</dt>
+              <dd>{profile.website || '(not set)'}</dd>
+            </dl>
+          </div>
+
+          <div class="review-section">
+            <h4>
+              Preferences
+              <button type="button" class="edit-link" onclick={() => goToStep(3)}>Edit</button>
+            </h4>
+            <dl>
+              <dt>Notifications</dt>
+              <dd>{preferences.notifications}</dd>
+              <dt>Timezone</dt>
+              <dd>{preferences.timezone}</dd>
+              <dt>Newsletter</dt>
+              <dd>{preferences.newsletter ? 'Yes' : 'No'}</dd>
+            </dl>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Navigation Buttons -->
+      <div class="form-nav">
+        {#if currentStep > 1}
+          <button type="button" class="btn-secondary" onclick={prevStep}>
+            Back
+          </button>
+        {:else}
+          <div></div> <!-- Spacer for flex alignment -->
+        {/if}
+
+        {#if currentStep < totalSteps}
+          <button type="button" class="btn-primary" onclick={nextStep}>
+            Continue
+          </button>
+        {:else}
+          <button
+            type="submit"
+            class="btn-primary btn-submit"
+            disabled={!formValid || submitting}
+          >
+            {#if submitting}
+              Creating Account...
+            {:else}
+              Create Account
+            {/if}
+          </button>
         {/if}
       </div>
 
-      <!-- Email field -->
-      <div class="field">
-        <label for="email">Email</label>
-        <input
-          id="email"
-          type="email"
-          bind:value={email}
-          onblur={() => emailTouched = true}
-          placeholder="you@example.com"
-          class:invalid={emailTouched && !emailValid}
-          class:valid={emailTouched && emailValid}
-          aria-describedby={emailError ? "email-error" : undefined}
-          aria-invalid={emailTouched && !emailValid}
-        />
-        {#if emailError}
-          <span id="email-error" class="error" role="alert">{emailError}</span>
-        {/if}
-      </div>
-
-      <!-- Subject dropdown -->
-      <div class="field">
-        <label for="subject">Subject</label>
-        <select id="subject" bind:value={subject}>
-          <option value="" disabled>Select a subject</option>
-          <option value="general">General Inquiry</option>
-          <option value="support">Technical Support</option>
-          <option value="billing">Billing Question</option>
-          <option value="feedback">Feedback</option>
-        </select>
-      </div>
-
-      <!-- Message textarea -->
-      <div class="field">
-        <label for="message">
-          Message ({messageLength}/10 min characters)
-        </label>
-        <textarea
-          id="message"
-          bind:value={message}
-          onblur={() => messageTouched = true}
-          placeholder="Tell us what's on your mind..."
-          rows="5"
-          class:invalid={messageTouched && !messageValid}
-          class:valid={messageTouched && messageValid}
-          aria-describedby={messageError ? "message-error" : undefined}
-          aria-invalid={messageTouched && !messageValid}
-        ></textarea>
-        {#if messageError}
-          <span id="message-error" class="error" role="alert">{messageError}</span>
-        {/if}
-      </div>
-
-      <button type="submit" class="submit-btn" disabled={!formValid}>
-        Send Message
-      </button>
+      {#if currentStep > 1}
+        <p class="draft-notice">
+          Your progress is saved automatically.
+          <button type="button" class="text-link" onclick={() => { clearDraft(); resetForm(); }}>
+            Clear draft
+          </button>
+        </p>
+      {/if}
     </form>
-
-    <!-- Live preview panel -->
-    <div class="preview">
-      <h3>Live Preview</h3>
-      <div class="preview-card">
-        <p><strong>From:</strong> {name || "—"}</p>
-        <p><strong>Email:</strong> {email || "—"}</p>
-        <p><strong>Subject:</strong> {subject || "—"}</p>
-        <p><strong>Message:</strong></p>
-        <p class="preview-message">{message || "(no message yet)"}</p>
-      </div>
-    </div>
   </div>
 {/if}
 ```
 
-### Accessibility Details Worth Noting
+### Accessibility Deep Dive
 
-Several accessibility patterns in this form deserve explanation:
+Every form element in the markup above follows accessibility best practices that are worth understanding:
 
-```svelte
-<!-- 1. aria-describedby links the input to its error message -->
-<input
-  aria-describedby={nameError ? "name-error" : undefined}
-  aria-invalid={nameTouched && !nameValid}
-/>
-{#if nameError}
-  <span id="name-error" role="alert">{nameError}</span>
-{/if}
-<!-- When the error appears, screen readers announce it because of role="alert".
-     The aria-describedby association means the error is read when the input is focused. -->
+- **`aria-required="true"`** on required fields communicates to screen readers that the field must be filled
+- **`aria-invalid="true"`** marks fields with errors — screen readers announce "invalid entry" when the user focuses the field
+- **`aria-describedby`** links the field to its error message or hint text — the screen reader reads both the label and the description
+- **`role="alert"`** on error messages causes them to be announced immediately when they appear, even if the user is not focused on that field
+- **`autocomplete`** attributes (`given-name`, `family-name`, `email`, `new-password`) enable browser autofill and password managers
+- **`<fieldset>` and `<legend>`** group related fields — screen readers announce "Personal Information group" when entering the fieldset
+- **`aria-current="step"`** on the progress bar marks the active step for screen readers
+- **The `sr-only` class** hides content visually but keeps it available to screen readers
 
-<!-- 2. onblur for touched tracking — validation triggers when user LEAVES the field -->
-<input onblur={() => nameTouched = true} />
-<!-- Why onblur instead of oninput? Because oninput would show errors while the user
-     is still typing their name. "N" → "Name must be 2+ characters" → annoying.
-     onblur waits until they move to the next field, which feels more natural. -->
+## Step 8: Progressive Enhancement with use:enhance
 
-<!-- 3. The disabled submit button -->
-<button disabled={!formValid}>Send Message</button>
-<!-- This prevents submission of invalid data without relying on JavaScript.
-     But it also communicates visually: "you are not done yet." The grayed-out
-     button is a universal signal that something is missing. -->
-```
-
-### WRONG vs CORRECT: When to Show Errors
+The `use:enhance` action intercepts the form submission and handles it with JavaScript. Without JavaScript, the form submits normally as a standard HTML form POST:
 
 ```svelte
-<!-- WRONG: Show errors immediately — the page loads screaming at the user -->
-{#if !nameValid}
-  <span class="error">Name must be at least 2 characters.</span>
-{/if}
+<script lang="ts">
+  import { enhance } from '$app/forms';
 
-<!-- WRONG: Only show errors on submit — no feedback while typing -->
-<!-- (This is the alert() approach from earlier) -->
+  function handleSubmit() {
+    return async ({ result, update }) => {
+      submitting = true;
 
-<!-- WRONG: Show errors on every keystroke — annoying while typing a valid name -->
-<input oninput={() => nameTouched = true} />
+      if (result.type === 'success') {
+        submitted = true;
+        clearDraft();
+      } else if (result.type === 'failure') {
+        // Server returned validation errors
+        serverErrors = result.data?.errors ?? {};
+        if (result.data?.step) {
+          currentStep = result.data.step;
+        }
+        announceError('There were errors with your submission. Please review and try again.');
+      } else if (result.type === 'error') {
+        announceError('An unexpected error occurred. Please try again.');
+      }
 
-<!-- CORRECT: Show errors on blur — after the user leaves the field -->
-<input onblur={() => nameTouched = true} />
-{#if nameTouched && !nameValid}
-  <span class="error">Name must be at least 2 characters.</span>
-{/if}
-<!-- The user types, moves on, THEN sees the error. Respectful and helpful. -->
+      submitting = false;
 
-<!-- ALSO CORRECT: Show errors on blur, then update in real-time after first error -->
-<!-- This is the ideal UX — once the user knows about the error, give them
-     live feedback as they fix it -->
+      // Do NOT call update() — we handle the UI update ourselves
+      // Calling update() would trigger SvelteKit's default form behavior
+    };
+  }
+
+  function resetForm() {
+    personal = { firstName: '', lastName: '', email: '', password: '', confirmPassword: '' };
+    profile = { avatar: null, avatarPreview: '', bio: '', website: '' };
+    preferences = { notifications: 'email', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, newsletter: false, marketingEmails: false };
+    currentStep = 1;
+    submitted = false;
+    submitting = false;
+    touched = new Set();
+    serverErrors = {};
+    clearDraft();
+  }
+</script>
 ```
 
-## Step 4: Styling
+## Step 9: Server-Side Validation with Zod
 
-Add polished styles to make the form look professional. Notice the visual feedback system: invalid fields get a red border, valid fields get a green border, and there are smooth transitions between states:
+Client-side validation is for UX — it gives instant feedback. Server-side validation is for security — it cannot be bypassed. Always validate on both sides:
+
+```typescript
+// src/routes/register/+page.server.ts
+import { fail, redirect } from '@sveltejs/kit';
+import type { Actions } from './$types';
+import { z } from 'zod';
+import { db } from '$lib/server/db';
+import { users } from '$lib/server/schema';
+import { eq } from 'drizzle-orm';
+import { hashPassword } from '$lib/server/auth';
+
+const RegisterSchema = z.object({
+  firstName: z.string().min(2, 'At least 2 characters').max(50).trim(),
+  lastName: z.string().min(2, 'At least 2 characters').max(50).trim(),
+  email: z.string().email('Invalid email address').max(255).toLowerCase().trim(),
+  password: z
+    .string()
+    .min(8, 'At least 8 characters')
+    .regex(/[A-Z]/, 'Must include an uppercase letter')
+    .regex(/[a-z]/, 'Must include a lowercase letter')
+    .regex(/[0-9]/, 'Must include a number'),
+  confirmPassword: z.string(),
+  bio: z.string().max(500).optional().default(''),
+  website: z.string().url().optional().or(z.literal('')),
+  notifications: z.enum(['email', 'push', 'none']).default('email'),
+  timezone: z.string().default('UTC'),
+  newsletter: z.preprocess((v) => v === 'on' || v === 'true', z.boolean().default(false)),
+  marketingEmails: z.preprocess((v) => v === 'on' || v === 'true', z.boolean().default(false))
+}).refine((data) => data.password === data.confirmPassword, {
+  message: 'Passwords do not match',
+  path: ['confirmPassword']
+});
+
+export const actions: Actions = {
+  default: async ({ request, cookies }) => {
+    const formData = await request.formData();
+
+    // Convert FormData to an object for Zod validation
+    const raw = Object.fromEntries(formData);
+
+    const result = RegisterSchema.safeParse(raw);
+
+    if (!result.success) {
+      const errors: Record<string, string> = {};
+      for (const issue of result.error.issues) {
+        const field = issue.path[0]?.toString() ?? 'form';
+        errors[field] = issue.message;
+      }
+
+      // Determine which step has the first error
+      const step1Fields = ['firstName', 'lastName', 'email', 'password', 'confirmPassword'];
+      const step2Fields = ['bio', 'website'];
+      const errorFields = Object.keys(errors);
+
+      let step = 3;
+      if (errorFields.some(f => step1Fields.includes(f))) step = 1;
+      else if (errorFields.some(f => step2Fields.includes(f))) step = 2;
+
+      return fail(400, { errors, step });
+    }
+
+    const { firstName, lastName, email, password, bio, website, notifications, timezone, newsletter, marketingEmails } = result.data;
+
+    // Check if email already exists
+    const existing = await db.select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+
+    if (existing.length > 0) {
+      return fail(400, {
+        errors: { email: 'An account with this email already exists' },
+        step: 1
+      });
+    }
+
+    // Hash password and create user
+    const passwordHash = await hashPassword(password);
+
+    // Handle file upload (avatar)
+    const avatarFile = formData.get('avatar') as File | null;
+    let avatarUrl: string | null = null;
+    if (avatarFile && avatarFile.size > 0) {
+      // Validate file on server too
+      if (avatarFile.size > 5 * 1024 * 1024) {
+        return fail(400, { errors: { avatar: 'Image must be under 5MB' }, step: 2 });
+      }
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(avatarFile.type)) {
+        return fail(400, { errors: { avatar: 'Invalid image format' }, step: 2 });
+      }
+      // In production: upload to S3/R2/Cloudinary and get the URL
+      // avatarUrl = await uploadToStorage(avatarFile);
+    }
+
+    await db.insert(users).values({
+      firstName,
+      lastName,
+      email,
+      passwordHash,
+      bio,
+      website: website || null,
+      avatarUrl,
+      notifications,
+      timezone,
+      newsletter,
+      marketingEmails
+    });
+
+    // Create session and redirect (covered in auth lessons)
+    // For now, return success
+    return { success: true };
+  }
+};
+```
+
+The `z.preprocess` calls for checkbox fields handle the fact that HTML checkboxes send `"on"` when checked and nothing when unchecked. The FormData object will have `"on"` or be missing entirely — the preprocessor normalizes this to a boolean.
+
+## Step 10: Styling
+
+Add polished styles that work across the multi-step flow:
 
 ```svelte
 <style>
   .form-container {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 32px;
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 24px;
+    max-width: 600px;
+    margin: 2rem auto;
+    padding: 2rem;
+  }
+
+  .progress-bar {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 2rem;
+    position: relative;
+  }
+
+  .progress-bar::before {
+    content: '';
+    position: absolute;
+    top: 20px;
+    left: 40px;
+    right: 40px;
+    height: 2px;
+    background: #e2e8f0;
+    z-index: 0;
+  }
+
+  .step-indicator {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+    z-index: 1;
+    padding: 0;
+  }
+
+  .step-indicator:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  .step-number {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 0.9rem;
+    background: #e2e8f0;
+    color: #64748b;
+    transition: all 0.2s;
+  }
+
+  .step-indicator.active .step-number {
+    background: #3b82f6;
+    color: white;
+  }
+
+  .step-indicator.completed .step-number {
+    background: #22c55e;
+    color: white;
+  }
+
+  .step-label {
+    font-size: 0.8rem;
+    color: #64748b;
+    font-weight: 500;
+  }
+
+  .step-indicator.active .step-label {
+    color: #3b82f6;
+    font-weight: 600;
   }
 
   form {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 1rem;
   }
 
-  h2 {
-    margin: 0 0 8px;
-    color: #2c3e50;
+  fieldset {
+    border: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
   }
 
   .field {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 0.375rem;
   }
 
   label {
     font-weight: 600;
     font-size: 0.9rem;
-    color: #555;
+    color: #374151;
   }
 
   input, select, textarea {
-    padding: 10px 12px;
-    border: 2px solid #ddd;
-    border-radius: 6px;
+    padding: 0.625rem 0.75rem;
+    border: 2px solid #d1d5db;
+    border-radius: 0.5rem;
     font-size: 1rem;
     font-family: inherit;
-    transition: border-color 0.2s;
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
 
   input:focus, select:focus, textarea:focus {
     outline: none;
-    border-color: #3498db;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
   }
 
-  /* Validation visual feedback */
-  .invalid {
-    border-color: #e74c3c;
+  input[aria-invalid="true"],
+  textarea[aria-invalid="true"] {
+    border-color: #ef4444;
   }
 
-  .valid {
-    border-color: #27ae60;
+  input[aria-invalid="true"]:focus,
+  textarea[aria-invalid="true"]:focus {
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
   }
 
   .error {
-    color: #e74c3c;
+    color: #ef4444;
     font-size: 0.8rem;
+    font-weight: 500;
+  }
+
+  .hint {
+    color: #6b7280;
+    font-size: 0.8rem;
+  }
+
+  .strength-meter {
+    height: 4px;
+    background: #e5e7eb;
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 0.25rem;
+  }
+
+  .strength-bar {
+    height: 100%;
+    transition: width 0.3s, background-color 0.3s;
+    border-radius: 2px;
+  }
+
+  .strength-bar.weak { background: #ef4444; }
+  .strength-bar.fair { background: #f59e0b; }
+  .strength-bar.strong { background: #22c55e; }
+
+  .strength-label {
+    font-size: 0.75rem;
+    color: #6b7280;
   }
 
   textarea {
     resize: vertical;
+    min-height: 100px;
   }
 
-  .submit-btn {
-    padding: 12px;
-    background: #3498db;
+  .avatar-upload {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .avatar-preview {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .avatar-preview img {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid #e5e7eb;
+  }
+
+  .remove-avatar {
+    background: none;
+    border: 1px solid #ef4444;
+    color: #ef4444;
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.375rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+
+  .checkbox-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .checkbox-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    font-weight: normal;
+    cursor: pointer;
+  }
+
+  .checkbox-label input[type="checkbox"] {
+    margin-top: 0.25rem;
+    width: 1.125rem;
+    height: 1.125rem;
+  }
+
+  .form-nav {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #e5e7eb;
+  }
+
+  .btn-primary, .btn-secondary {
+    padding: 0.75rem 1.5rem;
+    border-radius: 0.5rem;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .btn-primary {
+    background: #3b82f6;
     color: white;
     border: none;
-    border-radius: 6px;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: background 0.2s;
   }
 
-  .submit-btn:hover:not(:disabled) {
-    background: #2980b9;
+  .btn-primary:hover:not(:disabled) {
+    background: #2563eb;
   }
 
-  .submit-btn:disabled {
-    background: #bdc3c7;
+  .btn-primary:disabled {
+    background: #93c5fd;
     cursor: not-allowed;
   }
 
-  .preview {
-    position: sticky;
-    top: 24px;
-    align-self: start;
+  .btn-secondary {
+    background: white;
+    color: #374151;
+    border: 2px solid #d1d5db;
   }
 
-  .preview h3 {
-    margin: 0 0 12px;
-    color: #2c3e50;
+  .btn-secondary:hover {
+    background: #f9fafb;
   }
 
-  .preview-card {
-    padding: 20px;
-    background: #f8f9fa;
-    border: 1px solid #eee;
-    border-radius: 8px;
+  .review {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
   }
 
-  .preview-card p {
-    margin: 0 0 8px;
+  .review-section {
+    padding: 1rem;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+  }
+
+  .review-section h4 {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 0 0 0.75rem;
     font-size: 0.95rem;
   }
 
-  .preview-message {
-    color: #666;
-    font-style: italic;
-    white-space: pre-wrap;
+  .edit-link {
+    background: none;
+    border: none;
+    color: #3b82f6;
+    cursor: pointer;
+    font-size: 0.85rem;
+    text-decoration: underline;
+  }
+
+  dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.5rem 1rem;
+    margin: 0;
+    font-size: 0.9rem;
+  }
+
+  dt {
+    color: #6b7280;
+    font-weight: 500;
+  }
+
+  dd {
+    margin: 0;
+    color: #111827;
+  }
+
+  .review-avatar {
+    border-radius: 50%;
+    object-fit: cover;
   }
 
   .success {
     text-align: center;
-    padding: 48px 24px;
+    padding: 3rem 1.5rem;
     max-width: 500px;
     margin: 0 auto;
   }
 
   .success h2 {
-    color: #27ae60;
+    color: #22c55e;
+    margin-bottom: 0.5rem;
   }
 
-  .success button {
-    margin-top: 16px;
-    padding: 10px 24px;
-    background: #3498db;
-    color: white;
+  .draft-notice {
+    text-align: center;
+    font-size: 0.8rem;
+    color: #9ca3af;
+    margin-top: 0.5rem;
+  }
+
+  .text-link {
+    background: none;
     border: none;
-    border-radius: 6px;
-    font-size: 1rem;
+    color: #6b7280;
     cursor: pointer;
+    text-decoration: underline;
+    font-size: inherit;
   }
 
-  @media (max-width: 768px) {
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  @media (max-width: 640px) {
     .form-container {
+      padding: 1rem;
+    }
+
+    .step-label {
+      display: none;
+    }
+
+    dl {
       grid-template-columns: 1fr;
+    }
+
+    dt {
+      margin-top: 0.5rem;
     }
   }
 </style>
 ```
 
-### Understanding the CSS Choices
-
-A few CSS patterns here deserve explanation because they apply to every form you will ever build:
-
-```css
-/* 1. Border transitions for validation feedback */
-input, select, textarea {
-  transition: border-color 0.2s;
-}
-/* Without the transition, the border snaps from gray to red/green instantly.
-   The 0.2s fade feels polished and professional. Small details matter. */
-
-/* 2. Sticky preview panel */
-.preview {
-  position: sticky;
-  top: 24px;
-  align-self: start;
-}
-/* The preview stays visible as the user scrolls through a long form.
-   align-self: start prevents the sticky element from stretching to fill
-   the grid row height. */
-
-/* 3. The :not(:disabled) pseudo-class chain */
-.submit-btn:hover:not(:disabled) {
-  background: #2980b9;
-}
-/* Without :not(:disabled), the hover effect still applies to the disabled
-   button, making it look clickable when it is not. This is a subtle but
-   important UX detail — the disabled state should feel "dead." */
-
-/* 4. pre-wrap on the message preview */
-.preview-message {
-  white-space: pre-wrap;
-}
-/* This preserves line breaks the user types in the textarea.
-   Without it, a multi-paragraph message shows as a single block of text
-   in the preview, which is confusing. */
-```
-
-## The Complete Component
-
-When you put all four steps together in a single `.svelte` file, you get a fully functional contact form with:
-- Real-time validation that only shows errors after the user interacts with a field (onblur)
-- A live preview that updates as the user fills out the form
-- A disabled submit button until all fields are valid
-- A success screen after submission with a "Send Another" reset button
-- Responsive layout that stacks on mobile
-- Accessible error messages with `aria-describedby` and `role="alert"`
-- Visual feedback (green/red borders) that transitions smoothly
-
-## Architectural Patterns: Scaling Beyond This Form
-
-This contact form teaches patterns that apply to every form you will build. Let's examine how they scale.
-
-### Pattern 1: Extracted Validation Functions
-
-As forms grow, inline validation becomes hard to read. Extract validation into functions:
-
-```svelte
-<script>
-  // Validation rules as pure functions — testable and reusable
-  function validateName(value) {
-    if (value.trim().length === 0) return "Name is required.";
-    if (value.trim().length < 2) return "Name must be at least 2 characters.";
-    if (value.trim().length > 100) return "Name must be under 100 characters.";
-    return "";
-  }
-
-  function validateEmail(value) {
-    if (value.trim().length === 0) return "Email is required.";
-    if (!value.includes("@") || !value.includes(".")) {
-      return "Please enter a valid email address.";
-    }
-    // Check for common typos
-    const domain = value.split("@")[1];
-    if (domain === "gmial.com") return "Did you mean gmail.com?";
-    if (domain === "gamil.com") return "Did you mean gmail.com?";
-    return "";
-  }
-
-  function validateMessage(value) {
-    const trimmed = value.trim();
-    if (trimmed.length === 0) return "Message is required.";
-    if (trimmed.length < 10) return `Message needs ${10 - trimmed.length} more characters.`;
-    if (trimmed.length > 2000) return `Message is ${trimmed.length - 2000} characters too long.`;
-    return "";
-  }
-
-  // Derived errors using the validation functions
-  let nameError = $derived(nameTouched ? validateName(name) : "");
-  let emailError = $derived(emailTouched ? validateEmail(email) : "");
-  let messageError = $derived(messageTouched ? validateMessage(message) : "");
-
-  // Form is valid when ALL errors are empty
-  let formValid = $derived(
-    validateName(name) === "" &&
-    validateEmail(email) === "" &&
-    subject !== "" &&
-    validateMessage(message) === ""
-  );
-</script>
-```
-
-Now validation functions can be unit tested in isolation:
-
-```typescript
-// validation.test.ts
-import { validateName, validateEmail, validateMessage } from './validation';
-
-test('name validation', () => {
-  expect(validateName("")).toBe("Name is required.");
-  expect(validateName("A")).toBe("Name must be at least 2 characters.");
-  expect(validateName("Al")).toBe("");
-  expect(validateName("A".repeat(101))).toBe("Name must be under 100 characters.");
-});
-
-test('email typo detection', () => {
-  expect(validateEmail("user@gmial.com")).toBe("Did you mean gmail.com?");
-  expect(validateEmail("user@gmail.com")).toBe("");
-});
-```
-
-### Pattern 2: The Form Data Object Pattern
-
-For larger forms, individual variables become unwieldy. Group them:
-
-```svelte
-<script>
-  // WRONG for large forms: many individual state variables
-  let name = $state("");
-  let email = $state("");
-  let phone = $state("");
-  let address1 = $state("");
-  let address2 = $state("");
-  let city = $state("");
-  let state_ = $state("");
-  let zip = $state("");
-  // ... 15 more fields
-
-  // CORRECT for large forms: a single form data object
-  let form = $state({
-    name: "",
-    email: "",
-    phone: "",
-    address1: "",
-    address2: "",
-    city: "",
-    state: "",
-    zip: "",
-  });
-
-  let touched = $state({
-    name: false,
-    email: false,
-    phone: false,
-    // ...
-  });
-
-  // Reset is now simple:
-  function resetForm() {
-    form = { name: "", email: "", phone: "", /* ... */ };
-    touched = { name: false, email: false, phone: false, /* ... */ };
-  }
-
-  // Derived validation works the same way:
-  let nameValid = $derived(form.name.trim().length >= 2);
-</script>
-
-<!-- Binding works with object properties -->
-<input bind:value={form.name} onblur={() => touched.name = true} />
-```
-
-### Pattern 3: Form Submission with Loading States
-
-Real forms submit to a server. Here is the production pattern:
-
-```svelte
-<script>
-  let submitting = $state(false);
-  let submitError = $state("");
-
-  async function handleSubmit(event) {
-    event.preventDefault();
-    if (!formValid || submitting) return;
-
-    submitting = true;
-    submitError = "";
-
-    try {
-      const response = await fetch("/api/contact", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, subject, message }),
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.message || "Something went wrong");
-      }
-
-      submitted = true;
-    } catch (err) {
-      submitError = err instanceof Error ? err.message : "Failed to send message";
-    } finally {
-      submitting = false;
-    }
-  }
-</script>
-
-{#if submitError}
-  <div class="error-banner" role="alert">{submitError}</div>
-{/if}
-
-<button type="submit" disabled={!formValid || submitting}>
-  {#if submitting}
-    Sending...
-  {:else}
-    Send Message
-  {/if}
-</button>
-```
-
-### Pattern 4: Preventing Double Submission
-
-Double submission is a real problem. A user clicks "Submit," nothing happens immediately, they click again, and two messages are sent. Three layers of defense:
-
-```svelte
-<script>
-  let submitting = $state(false);
-
-  async function handleSubmit(event) {
-    event.preventDefault();
-
-    // Layer 1: Guard clause — if already submitting, bail out
-    if (submitting) return;
-
-    submitting = true;
-
-    try {
-      await fetch("/api/contact", { /* ... */ });
-      submitted = true;
-    } finally {
-      submitting = false;
-    }
-  }
-</script>
-
-<!-- Layer 2: Disable the button during submission -->
-<button type="submit" disabled={!formValid || submitting}>
-  {submitting ? "Sending..." : "Send Message"}
-</button>
-
-<!-- Layer 3: Server-side idempotency (not shown here but critical for payments) -->
-```
-
-## Edge Cases and Gotchas
-
-### Gotcha 1: bind:value on Select Elements
-
-```svelte
-<!-- WRONG: Initial value does not match any option value -->
-<script>
-  let subject = $state("please-select"); // No option has this value!
-</script>
-<select bind:value={subject}>
-  <option value="" disabled>Select a subject</option>
-  <option value="general">General Inquiry</option>
-</select>
-<!-- The select shows a blank state because no option matches -->
-
-<!-- CORRECT: Initial value matches the disabled option -->
-<script>
-  let subject = $state(""); // Matches the disabled option
-</script>
-<select bind:value={subject}>
-  <option value="" disabled>Select a subject</option>
-  <option value="general">General Inquiry</option>
-</select>
-```
-
-### Gotcha 2: Textarea Whitespace
-
-```svelte
-<!-- WRONG: Whitespace between tags becomes the textarea's initial value -->
-<textarea bind:value={message}>
-</textarea>
-<!-- The textarea starts with a newline character! message === "\n" -->
-
-<!-- CORRECT: Self-closing or no whitespace -->
-<textarea bind:value={message}></textarea>
-```
-
-### Gotcha 3: Form Reset Does Not Reset bind:value
-
-```svelte
-<!-- WRONG: Using the native form reset — it resets the DOM but not Svelte state -->
-<form onreset={() => { /* Svelte state is still "John" */ }}>
-  <input bind:value={name} />
-  <button type="reset">Reset</button>
-</form>
-<!-- The DOM resets to empty, but name still === "John".
-     Svelte then re-renders the input with "John" — it looks like nothing happened. -->
-
-<!-- CORRECT: Reset Svelte state manually -->
-<button type="button" onclick={resetForm}>Reset</button>
-```
-
-### Gotcha 4: Email Validation Complexity
-
-```svelte
-<script>
-  // This "simple" regex catches 99% of cases for learning purposes:
-  let emailValid = $derived(email.includes("@") && email.includes("."));
-
-  // But it allows clearly invalid emails like "@." or "a@b.c"
-  // For production, use a validation library or this more robust check:
-  let emailValidProd = $derived(
-    /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)
-  );
-
-  // Even this regex is not perfect. The only true validation for an email
-  // address is to send a confirmation email and see if they click the link.
-  // Overly strict regex rejects valid addresses like user+tag@domain.co.uk
-</script>
-```
-
-### Gotcha 5: Mobile Keyboard and Input Types
-
-```svelte
-<!-- Using the right input type changes the mobile keyboard -->
-<input type="email" />    <!-- Shows @ and . on mobile keyboard -->
-<input type="tel" />      <!-- Shows number pad on mobile -->
-<input type="url" />      <!-- Shows / and .com on mobile keyboard -->
-<input type="text" />     <!-- Generic keyboard — no optimization -->
-
-<!-- These type attributes are free UX improvements on mobile.
-     They cost you nothing and make the form easier to fill out. -->
-```
-
 ## What You Used
 
-This project combined nearly everything from Phase 1:
-- **HTML**: form, input, select, textarea, label, button elements with proper accessibility attributes
-- **CSS**: Grid layout, Flexbox, scoped styles, transitions, media queries, pseudo-classes (`:disabled`, `:not()`, `:hover`)
-- **JavaScript**: `$state()` for reactive form data, `$derived()` for validation, event handlers, async/await for submission
-- **Svelte**: `bind:value`, `{#if}/{:else}`, `class:` directives, event handling, `aria-*` attributes
-- **UX patterns**: Touched/dirty tracking, progressive validation, loading states, double-submission prevention
+This project combined concepts from multiple phases of the course:
+- **HTML**: form, input, select, textarea, fieldset, legend, label, button, dl/dt/dd, progress elements
+- **CSS**: Grid layout, Flexbox, transitions, pseudo-elements (progress bar connector), media queries, `:focus` styling, `aspect-ratio`
+- **JavaScript**: `$state()` for reactive form data, `$derived()` for validation rules and computed values, `$effect()` for auto-save persistence, `Set` for tracking touched fields
+- **Svelte**: `bind:value`, `bind:checked`, `{#if}`, `{#each}`, `class:`, event handling, `onMount`, `use:enhance`
+- **SvelteKit**: form actions, `fail()` for validation errors, server-side Zod validation, progressive enhancement
+- **Accessibility**: ARIA attributes (`aria-required`, `aria-invalid`, `aria-describedby`, `aria-live`, `aria-current`), focus management, screen reader announcements, `autocomplete` attributes
+- **Security**: server-side validation that mirrors client validation, password hashing, file upload validation, no passwords in localStorage
 
 ## Try It
 
-Build the complete contact form described in this lesson. Then extend it with these challenges:
+Build this form step by step:
 
-1. **Phone number field**: Add a phone number input with `type="tel"`. Validate that it contains at least 10 digits (strip non-digit characters before counting). Use the `inputmode="tel"` attribute for the best mobile keyboard.
+1. Start with Step 1 only — personal info fields with `$state()`, `$derived()` validation, and the touched pattern. Get the validation working perfectly before moving on.
 
-2. **Newsletter checkbox**: Add a "Subscribe to newsletter" checkbox using `bind:checked`. Show it in the live preview as "Newsletter: Yes/No".
+2. Add the step navigation with the progress bar. Verify that you cannot advance past Step 1 without filling all fields correctly.
 
-3. **Urgency radio buttons**: Add a radio button group for urgency (Low, Normal, Urgent). Change the preview card's left border color based on the selection (green for low, blue for normal, red for urgent).
+3. Add Step 2 with the file upload. Test that the preview appears, the file size/type validation works, and the remove button cleans up properly.
 
-4. **Character counter with warning**: Add a max character limit (500) to the message field. Show a counter that turns yellow at 400 characters and red at 480+. Prevent typing beyond 500 characters.
+4. Add Step 3 with preferences. These fields all have defaults so they are always valid.
 
-5. **LocalStorage persistence**: Save the form data to `localStorage` on every change (use `$effect`). Restore it when the page loads. Add a "Clear saved data" button. This prevents data loss if the user accidentally refreshes the page.
+5. Add Step 4 — the review page. Include "Edit" buttons that jump back to the correct step.
 
-6. **Animated validation feedback**: Add CSS transitions to the error messages so they fade in instead of appearing abruptly. Use Svelte's `transition:slide` for a polished slide-down effect.
+6. Add localStorage persistence. Refresh the page and verify your data survives. Type in a password, refresh, and verify it is NOT restored.
+
+7. Add the server action with Zod validation. Test with JavaScript disabled to verify the form still works as a standard POST.
+
+8. Run a screen reader (VoiceOver on Mac, NVDA on Windows) and navigate the form. Fix any issues you find — missing labels, broken tab order, unannounced errors.
 
 ## Key Takeaways
 
-- Every form field is a state machine with three states: pristine, dirty+valid, dirty+invalid — track "touched" state to show errors only after the user interacts with a field
-- Use `$derived()` for validation rules, never `$effect()` — validation is derived data, not a side effect, and `$derived` eliminates timing gaps between value changes and validation updates
-- Use `onblur` (not `oninput`) to mark fields as touched — showing errors while the user is still typing their first character is hostile UX
-- Combine `$state()` and `bind:value` to create a two-way binding between the DOM and your component state
-- Show validation errors conditionally with `{#if}` — use `aria-describedby` and `role="alert"` so screen readers announce errors
-- Disable the submit button using the `disabled` attribute and a derived `formValid` boolean — this is visual feedback that "something is missing"
-- Use `event.preventDefault()` to handle form submission in JavaScript — without it, the browser submits the form as a traditional page navigation
-- A live preview gives users immediate feedback and builds confidence in the form data before submission
-- For large forms, group state into objects instead of individual variables — it simplifies reset logic and serialization
-- Always handle loading states and double-submission prevention in forms that submit to a server
-- Use the right `type` attribute on inputs (`email`, `tel`, `url`) — it costs nothing and gives mobile users an optimized keyboard
-- This pattern of state, binding, derived validation, touched tracking, and conditional rendering is the foundation of every interactive form you will ever build
+- Combine `$state()` and `bind:value` to track form inputs reactively — each field gets its own reactive variable
+- Use `$derived()` to create real-time validation rules that return `null` for valid and an error string for invalid
+- Track "touched" fields with a `Set` to avoid showing errors before the user has interacted with a field
+- Multi-step forms need validation gates: touch all fields in the current step and check validity before advancing
+- File uploads require `onchange` events (not `bind:value`), `URL.createObjectURL()` for previews, and `URL.revokeObjectURL()` for cleanup
+- Persist form drafts to `localStorage` with `$effect()` — but never persist sensitive data like passwords
+- Accessibility is not optional: use `aria-required`, `aria-invalid`, `aria-describedby`, `role="alert"`, and focus management for every form
+- Always validate on both client (for UX) and server (for security) — client validation can be bypassed
+- `use:enhance` gives you progressive enhancement: forms work without JavaScript, and JavaScript enhances the experience
+- The `autocomplete` attribute enables browser autofill and password managers — always include it
+- Server-side validation with Zod mirrors client validation rules and returns structured errors with `fail()`

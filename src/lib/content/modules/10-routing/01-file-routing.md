@@ -46,6 +46,10 @@ src/routes/
 
 Notice how deeply nested folders map to deeper URL paths. `pricing/plans/+page.svelte` becomes `/pricing/plans`. The directory hierarchy and URL hierarchy are the same thing — this is the mental model to internalize. If you find yourself thinking "I need to add a route for `/settings/profile`", your hands should already be creating `src/routes/settings/profile/+page.svelte`.
 
+A folder without a `+page.svelte` is not a route — it is just organizational structure. You can have `src/routes/settings/` exist as a folder that contains `profile/+page.svelte` and `account/+page.svelte` without `/settings` itself being a valid page. This is useful when you want a URL prefix that groups routes but does not need its own content.
+
+You can also place regular Svelte components alongside route files. A file like `src/routes/blog/PostCard.svelte` is just a component — it will not become a route because it does not start with `+`. This lets you co-locate helper components with the routes that use them, keeping related code together.
+
 ## Dynamic Routes
 
 Static routes only get you so far. What about `/blog/my-first-post` or `/users/42`? You cannot create a folder for every possible blog post. This is where **dynamic parameters** come in — wrap a folder name in square brackets to capture a variable segment:
@@ -252,6 +256,10 @@ Notice that `/blog/category/svelte` and `/blog/[slug]` do not conflict. SvelteKi
 Think of `src/routes/` as a tree. Each folder is a branch, each `+page.svelte` is a leaf. When a request arrives, SvelteKit walks the tree from the root, matching URL segments to folder names. Static names match literally. `[brackets]` match any single segment. `[...rest]` matches any remaining path. `((parens))` are invisible. `[[doubles]]` are optional.
 
 Your file system _is_ your routing table. There is no abstraction layer between them. This has a profound implication: anyone can understand your app's URL structure by glancing at the directory tree. No indirection, no config files, no magic. The file system is the source of truth.
+
+This design also means that refactoring URLs is refactoring files. Want to change `/blog` to `/articles`? Rename the folder. Your IDE's git diff shows exactly what URL changed. Code review for routing changes is just reviewing folder renames — no hunting through a router config for the right line. The simplicity is the feature.
+
+Compare this with frameworks that use a central router file. In those systems, the route definition, the component, and the data loader can live in three separate places. In SvelteKit, they all live in the same folder. Everything you need to understand a route is right there: `+page.svelte`, `+page.server.ts`, `+layout.svelte`, all co-located. This co-location is not accidental — it is a deliberate design choice that makes routes easy to reason about, easy to move, and easy to delete.
 
 ## Try It
 

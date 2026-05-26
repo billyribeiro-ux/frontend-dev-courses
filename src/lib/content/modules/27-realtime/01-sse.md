@@ -237,76 +237,46 @@ With `id:` and `Last-Event-ID`, you get exactly-once delivery semantics across r
 
 ## Real Example: Live Notification Feed
 
-Here is the client side of a production-flavored notification system. It combines named events, connection status tracking, `$derived` for unread counts, and accessible markup:
+Here is the client side of a production notification system, combining named events, connection status, `$derived`, and accessible markup:
 
 ```svelte
-<!-- src/lib/components/NotificationFeed.svelte -->
 <script lang="ts">
-  interface Notification {
-    id: string;
-    title: string;
-    body: string;
-    timestamp: string;
-    read: boolean;
-  }
+  interface Notification { id: string; title: string; body: string; timestamp: string; read: boolean; }
 
   let notifications = $state<Notification[]>([]);
   let unreadCount = $derived(notifications.filter(n => !n.read).length);
-  let connectionStatus = $state<'connecting' | 'connected' | 'disconnected'>('connecting');
+  let connected = $state(false);
 
   $effect(() => {
     const source = new EventSource('/api/notifications');
-
-    source.onopen = () => { connectionStatus = 'connected'; };
-
+    source.onopen = () => { connected = true; };
     source.addEventListener('notification', (event) => {
-      const notification: Notification = JSON.parse(event.data);
-      notifications = [notification, ...notifications].slice(0, 100);
+      const n: Notification = JSON.parse(event.data);
+      notifications = [n, ...notifications].slice(0, 100);
     });
-
-    source.onerror = () => {
-      connectionStatus = 'disconnected';
-      // EventSource reconnects automatically
-    };
-
+    source.onerror = () => { connected = false; };
     return () => source.close();
   });
-
-  function markAsRead(id: string) {
-    notifications = notifications.map(n =>
-      n.id === id ? { ...n, read: true } : n
-    );
-    fetch(`/api/notifications/${id}/read`, { method: 'POST' });
-  }
 </script>
 
-<div class="notification-bell">
-  {#if unreadCount > 0}
-    <span class="badge" aria-label="{unreadCount} unread notifications">{unreadCount}</span>
-  {/if}
-</div>
+{#if unreadCount > 0}
+  <span class="badge" aria-label="{unreadCount} unread notifications">{unreadCount}</span>
+{/if}
 
-<!-- role="log" + aria-live="polite" tells screen readers to announce new items -->
-<div class="notification-feed" role="log" aria-live="polite" aria-label="Notifications">
-  {#if connectionStatus === 'disconnected'}
-    <p class="status-warning">Reconnecting...</p>
-  {/if}
-
-  {#each notifications as notification (notification.id)}
-    <button
-      class="notification"
-      class:unread={!notification.read}
-      onclick={() => markAsRead(notification.id)}
-    >
-      <strong>{notification.title}</strong>
-      <p>{notification.body}</p>
-      <time>{new Date(notification.timestamp).toLocaleTimeString()}</time>
+<!-- role="log" tells screen readers to announce new items without interrupting -->
+<div role="log" aria-live="polite" aria-label="Notifications">
+  {#if !connected}<p>Reconnecting...</p>{/if}
+  {#each notifications as n (n.id)}
+    <button class:unread={!n.read} onclick={() => markAsRead(n.id)}>
+      <strong>{n.title}</strong>
+      <p>{n.body}</p>
+      <time>{new Date(n.timestamp).toLocaleTimeString()}</time>
     </button>
   {/each}
 </div>
 ```
 
-The server endpoint for this would follow the same pattern from the earlier SSE endpoint section: a `ReadableStream` that subscribes to a notification source for the authenticated user, sends missed events on reconnection via `Last-Event-ID`, and includes a 30-second heartbeat. Real-time features need to be accessible too — notice the `role="log"` and `aria-live="polite"` on the feed container.
+The server endpoint follows the same pattern from earlier: a `ReadableStream` subscribing to a notification source for the authenticated user, with `Last-Event-ID` for resuming and a 30-second heartbeat.
 
 ## SSE Limitations and Workarounds
 

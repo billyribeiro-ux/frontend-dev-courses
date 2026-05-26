@@ -4,6 +4,22 @@ Tailwind CSS v4 is a major overhaul of the framework. It is faster, simpler to c
 
 This lesson walks you through installing and configuring Tailwind v4 in a SvelteKit project from scratch, then covers everything you need for a production-ready setup: VS Code IntelliSense, class sorting with Prettier, extracting components vs `@apply`, coexistence with Svelte scoped styles, and troubleshooting the issues you will actually hit.
 
+## The Mental Model: CSS-First Configuration
+
+Tailwind v3 used a JavaScript config file (`tailwind.config.js`) to define your design system. Tailwind v4 moves everything into CSS. This is not just a syntax change — it is a philosophical shift:
+
+```
+Tailwind v3:                          Tailwind v4:
+  tailwind.config.js (JS)      →       @theme { } in app.css (CSS)
+  @tailwind base;              →       @import 'tailwindcss';
+  @tailwind components;        →       (automatic)
+  @tailwind utilities;         →       (automatic)
+  content: ['./src/**/*.svelte'] →     (automatic via Vite module graph)
+  PostCSS plugin               →       Vite plugin
+```
+
+Everything that was configured in JavaScript is now configured in CSS. Everything that was manual (content scanning, base/components/utilities layers) is now automatic. The result is fewer files, fewer dependencies, and fewer things that can break.
+
 ## Installation
 
 Install Tailwind and its Vite plugin:
@@ -40,7 +56,28 @@ export default defineConfig({
 });
 ```
 
-Why Tailwind first? The Tailwind Vite plugin needs to process CSS before SvelteKit's Vite plugin transforms `.svelte` files. If you reverse the order, you may get missing styles or build errors. This is a common setup mistake.
+### WRONG vs CORRECT: Plugin Order
+
+```typescript
+// WRONG — SvelteKit before Tailwind
+export default defineConfig({
+  plugins: [
+    sveltekit(),     // Processes .svelte files first
+    tailwindcss()    // Too late — Svelte has already compiled without Tailwind
+  ]
+});
+// Result: missing styles, broken builds, or styles that only appear after HMR
+
+// CORRECT — Tailwind before SvelteKit
+export default defineConfig({
+  plugins: [
+    tailwindcss(),   // Processes CSS first
+    sveltekit()      // Then Svelte has Tailwind utilities available
+  ]
+});
+```
+
+Why Tailwind first? The Tailwind Vite plugin needs to process CSS before SvelteKit's Vite plugin transforms `.svelte` files. If you reverse the order, you may get missing styles or build errors. This is a common setup mistake and the first thing to check when styles are not appearing.
 
 ## Importing Tailwind in CSS
 
@@ -52,6 +89,21 @@ Create or update your global CSS file to import Tailwind:
 ```
 
 That single line gives you access to every Tailwind utility class. It replaces the old v3 approach of three separate `@tailwind base`, `@tailwind components`, and `@tailwind utilities` directives.
+
+### WRONG vs CORRECT: CSS Import
+
+```css
+/* WRONG — v3 syntax (does not work in v4) */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* WRONG — wrong import path */
+@import 'tailwindcss/base';
+
+/* CORRECT — single v4 import */
+@import 'tailwindcss';
+```
 
 Make sure this CSS file is imported in your root layout:
 
@@ -90,6 +142,17 @@ However, if you have files outside the Vite module graph that contain Tailwind c
 
 The `@source` directive tells Tailwind to scan additional paths. This is rarely needed — for most SvelteKit projects, automatic detection works perfectly.
 
+### When @source Is Necessary
+
+| Scenario | Need @source? | Why |
+|----------|---------------|-----|
+| .svelte files in src/ | No | Vite module graph includes them |
+| .ts files in src/ | No | Same |
+| Markdown files with Tailwind classes | Yes | Not in the Vite module graph |
+| CMS content with embedded classes | Yes | External to your project |
+| JSON/YAML with class names | Yes | Not processed by Vite |
+| Dynamic classes from an API | Cannot detect | Use a safelist instead |
+
 ## Customizing with @theme
 
 In Tailwind v4, customization happens in CSS using the `@theme` directive. This replaces the old `tailwind.config.js` approach entirely:
@@ -123,6 +186,22 @@ Now you can use these custom values as Tailwind utilities:
 ```
 
 Every CSS variable you define in `@theme` becomes a usable utility class. The naming convention maps directly: `--color-brand` becomes `text-brand`, `bg-brand`, `border-brand`, etc. `--font-heading` becomes `font-heading`.
+
+### The @theme Variable Naming Convention
+
+The first segment of the variable name determines which utilities it generates:
+
+| Variable Pattern | Generated Utilities | Example |
+|-----------------|---------------------|---------|
+| `--color-*` | `text-*`, `bg-*`, `border-*`, `ring-*`, etc. | `--color-primary` → `bg-primary` |
+| `--font-*` | `font-*` | `--font-heading` → `font-heading` |
+| `--spacing-*` | `p-*`, `m-*`, `gap-*`, `w-*`, `h-*`, etc. | `--spacing-18` → `p-18` |
+| `--radius-*` | `rounded-*` | `--radius-card` → `rounded-card` |
+| `--shadow-*` | `shadow-*` | `--shadow-card` → `shadow-card` |
+| `--animate-*` | `animate-*` | `--animate-fade-in` → `animate-fade-in` |
+| `--breakpoint-*` | `*:` (responsive prefix) | `--breakpoint-xs` → `xs:` |
+
+Understanding this mapping is key. You are not writing arbitrary CSS variables — you are extending Tailwind's design system through a structured naming convention.
 
 ## Extending the Default Theme
 
@@ -169,6 +248,8 @@ Custom values in `@theme` are added alongside the default Tailwind palette — t
 </div>
 ```
 
+### Replacing the Default Theme
+
 To completely replace a namespace (for example, remove all default colors and only use your own), use the `--color-*: initial` pattern:
 
 ```css
@@ -182,7 +263,37 @@ To completely replace a namespace (for example, remove all default colors and on
 }
 ```
 
-This is useful for design system projects where you want total control over the available utilities.
+This is useful for design system projects where you want total control over the available utilities. But use it carefully — removing default colors means `text-red-500`, `bg-blue-200`, etc. stop working. Your team must use only the custom palette.
+
+### WRONG vs CORRECT: Theme Customization
+
+```css
+/* WRONG — defining theme variables inside a Svelte <style> block */
+<style>
+  @theme {
+    --color-brand: #ff3e00;
+  }
+  /* @theme must be in app.css, not in a component's scoped styles */
+  /* It will not be processed by the Tailwind Vite plugin */
+</style>
+
+/* WRONG — using tailwind.config.js (v3 approach) */
+// tailwind.config.js
+module.exports = {
+  theme: { extend: { colors: { brand: '#ff3e00' } } }
+};
+/* This file is ignored in Tailwind v4 */
+```
+
+```css
+/* CORRECT — @theme in app.css */
+/* src/app.css */
+@import 'tailwindcss';
+
+@theme {
+  --color-brand: #ff3e00;
+}
+```
 
 ## VS Code IntelliSense Setup
 
@@ -214,6 +325,16 @@ For the best experience, add these settings to your project's `.vscode/settings.
 
 The `includeLanguages` setting ensures IntelliSense works inside `.svelte` files. The `quickSuggestions` setting triggers autocomplete inside class strings. The `classRegex` patterns help IntelliSense recognize Tailwind classes in template literal strings (which you use for conditional classes).
 
+### Verifying IntelliSense Works
+
+After configuring, test it:
+1. Open a `.svelte` file
+2. Type `class="bg-"` — you should see autocomplete suggestions for all background colors
+3. Type `class="text-brand"` — your custom `@theme` colors should appear
+4. Hover over a class — you should see the generated CSS
+
+If autocomplete does not work, try: Command Palette > "Developer: Reload Window."
+
 ## Prettier Plugin for Class Sorting
 
 Consistent class order makes your code easier to read and prevents meaningless diff noise in pull requests. The `prettier-plugin-tailwindcss` plugin automatically sorts your Tailwind classes into a consistent order:
@@ -240,6 +361,29 @@ Create or update your Prettier config:
     }
   ]
 }
+```
+
+### WRONG vs CORRECT: Plugin Order in Prettier
+
+```json
+// WRONG — Tailwind before Svelte
+{
+  "plugins": [
+    "prettier-plugin-tailwindcss",
+    "prettier-plugin-svelte"
+  ]
+}
+// Tailwind tries to sort classes before Svelte parsing.
+// Result: broken formatting or missed class sorting in .svelte files.
+
+// CORRECT — Svelte before Tailwind
+{
+  "plugins": [
+    "prettier-plugin-svelte",
+    "prettier-plugin-tailwindcss"
+  ]
+}
+// Svelte parses first, then Tailwind sorts classes within the parsed output.
 ```
 
 The plugin order matters: `prettier-plugin-svelte` must come before `prettier-plugin-tailwindcss`. Svelte parsing must happen first so Tailwind can find and sort the classes.
@@ -278,7 +422,7 @@ This is almost always the right choice. Svelte components give you props, logic,
 
   let { variant = "default", children }: Props = $props();
 
-  const variantClasses = {
+  const variantClasses: Record<string, string> = {
     default: "bg-gray-100 text-gray-800",
     success: "bg-green-100 text-green-800",
     warning: "bg-yellow-100 text-yellow-800",
@@ -320,7 +464,49 @@ This is almost always the right choice. Svelte components give you props, logic,
 }
 ```
 
-Do not use `@apply` to create component-level classes like `.btn-primary` or `.card`. That defeats the purpose of Tailwind (co-located styles) and loses all the benefits of Svelte components (props, logic, types). If you need a reusable `.btn-primary` class, you need a `<Button>` component instead.
+### WRONG vs CORRECT: Component Extraction
+
+```css
+/* WRONG — creating component classes with @apply */
+.btn-primary {
+  @apply px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700;
+}
+.btn-secondary {
+  @apply px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50;
+}
+/* You have recreated CSS component classes.
+   No props, no logic, no types, no conditional rendering.
+   This defeats the purpose of both Tailwind AND Svelte. */
+```
+
+```svelte
+<!-- CORRECT — extract a Svelte component -->
+<!-- src/lib/components/Button.svelte -->
+<script lang="ts">
+  import type { Snippet } from 'svelte';
+
+  interface Props {
+    variant?: 'primary' | 'secondary';
+    disabled?: boolean;
+    children: Snippet;
+    onclick?: () => void;
+  }
+
+  let { variant = 'primary', disabled = false, children, onclick }: Props = $props();
+
+  const base = 'px-4 py-2 rounded-lg transition-colors font-medium';
+  const variants: Record<string, string> = {
+    primary: 'bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-300',
+    secondary: 'border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50'
+  };
+</script>
+
+<button class="{base} {variants[variant]}" {disabled} {onclick}>
+  {@render children()}
+</button>
+```
+
+If you need a reusable `.btn-primary` class, you need a `<Button>` component instead. Components give you props, variants, disabled states, loading states, TypeScript types, and conditional rendering — everything `@apply` cannot.
 
 ## Tailwind + Svelte Scoped Styles Coexistence
 
@@ -373,29 +559,71 @@ Tailwind utility classes and Svelte's `<style>` block work together without conf
 </style>
 ```
 
-Use Tailwind for: layout, spacing, typography, colors, responsive design, hover/focus states.
-Use scoped CSS for: pseudo-elements (`::before`, `::after`), complex animations, intricate state-dependent styles, third-party component overrides.
+**Use Tailwind for:** layout, spacing, typography, colors, responsive design, hover/focus states.
+**Use scoped CSS for:** pseudo-elements (`::before`, `::after`), complex animations, intricate state-dependent styles, third-party component overrides.
 
-One caveat: Svelte scoped styles have higher specificity than Tailwind utilities because Svelte adds a unique class to each scoped selector. If a scoped style and a Tailwind class target the same property, the scoped style wins. This is usually what you want, but be aware of it.
+### The Specificity Interaction
 
-## PostCSS Configuration
+One caveat: Svelte scoped styles have higher specificity than Tailwind utilities because Svelte adds a unique class to each scoped selector. If a scoped style and a Tailwind class target the same property, the scoped style wins:
 
-Tailwind v4 with the Vite plugin does not require PostCSS configuration. The Vite plugin handles CSS processing directly. However, if you need additional PostCSS plugins (like `autoprefixer` for older browser support or `postcss-preset-env` for modern CSS features), you can add a PostCSS config:
+```svelte
+<p class="text-blue-500">This text is NOT blue</p>
 
-```bash
-npm install -D postcss autoprefixer
+<style>
+  p { color: red; }
+  /* The scoped style compiles to p.svelte-abc123 { color: red; }
+     This has specificity 0-1-1, which beats .text-blue-500 (0-1-0).
+     The text is red, not blue. */
+</style>
 ```
 
-```javascript
-// postcss.config.js
-export default {
-  plugins: {
-    autoprefixer: {}
-  }
-};
+If you need the Tailwind class to win, remove the conflicting scoped style or use the `!` modifier (`text-blue-500!`) which adds `!important`.
+
+## Conditional Classes in Svelte
+
+Svelte provides several ways to apply classes conditionally, and each works well with Tailwind:
+
+```svelte
+<script lang="ts">
+  let isActive = $state(false);
+  let variant = $state<'primary' | 'danger'>('primary');
+</script>
+
+<!-- Method 1: class: directive (best for single boolean toggles) -->
+<button class="px-4 py-2 rounded-lg" class:bg-blue-600={isActive}>
+  Toggle
+</button>
+
+<!-- Method 2: Ternary in class string (best for switching between two states) -->
+<button class="px-4 py-2 rounded-lg {isActive ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}">
+  Toggle
+</button>
+
+<!-- Method 3: Object lookup (best for multiple variants) -->
+<button class="px-4 py-2 rounded-lg {
+  variant === 'primary' ? 'bg-blue-600 text-white hover:bg-blue-700' :
+  variant === 'danger' ? 'bg-red-600 text-white hover:bg-red-700' :
+  'bg-gray-100 text-gray-700'
+}">
+  {variant}
+</button>
 ```
 
-Note: Tailwind v4's Vite plugin already includes automatic vendor prefixing for the CSS it generates, so `autoprefixer` is only needed if you have additional non-Tailwind CSS that requires prefixing.
+### The Dynamic Class Pitfall
+
+```svelte
+<!-- WRONG — Tailwind cannot detect dynamically constructed class names -->
+<div class="text-{color}-500">Dynamic</div>
+<div class="bg-{variant}-100">Dynamic</div>
+<!-- The scanner searches for complete strings like "text-red-500".
+     It cannot evaluate JavaScript expressions like "text-" + color + "-500". -->
+
+<!-- CORRECT — always use complete, static class names -->
+<div class={color === 'red' ? 'text-red-500' : 'text-blue-500'}>Fixed</div>
+<div class={variant === 'success' ? 'bg-green-100' : 'bg-gray-100'}>Fixed</div>
+```
+
+Tailwind's scanner uses static analysis — it searches for complete class name strings in your source files. It cannot evaluate JavaScript expressions. Always use complete, static class names.
 
 ## Production Build and Purging
 
@@ -414,57 +642,7 @@ npm run build
 npm run preview
 ```
 
-Check the network tab in your browser's DevTools — the CSS file should be small. If it is unexpectedly large, check if you have dynamic class names that Tailwind cannot detect:
-
-```svelte
-<!-- Tailwind CAN detect these -->
-<div class="text-red-500">Static class</div>
-<div class={active ? "bg-green-500" : "bg-gray-500"}>Ternary</div>
-
-<!-- Tailwind CANNOT detect this — the class name is constructed dynamically -->
-<div class="text-{color}-500">Dynamic construction</div>
-
-<!-- Fix: use complete class names -->
-<div class={color === "red" ? "text-red-500" : "text-blue-500"}>Complete names</div>
-```
-
-Tailwind's scanner uses static analysis — it searches for complete class name strings in your source files. It cannot evaluate JavaScript expressions. Always use complete, static class names.
-
-## Verifying the Setup
-
-Create a test page to verify everything is working:
-
-```svelte
-<!-- src/routes/+page.svelte -->
-<div class="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-  <div class="bg-white p-8 rounded-xl shadow-lg text-center max-w-md w-full">
-    <h1 class="text-3xl font-bold text-gray-900 mb-4">
-      Tailwind is Working!
-    </h1>
-    <p class="text-gray-600 mb-6">
-      If you can see styled content, your setup is correct.
-    </p>
-    <div class="space-y-3">
-      <button class="w-full bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors">
-        Primary Button
-      </button>
-      <button class="w-full border border-gray-300 text-gray-700 px-6 py-2 rounded-lg hover:bg-gray-50 transition-colors">
-        Secondary Button
-      </button>
-    </div>
-    <!-- Test responsive: resize the browser -->
-    <p class="mt-6 text-sm text-gray-400 hidden sm:block">
-      Responsive test: visible on sm screens and up
-    </p>
-    <!-- Test hover states -->
-    <div class="mt-4 p-4 rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors cursor-pointer">
-      Hover me to test transitions
-    </div>
-  </div>
-</div>
-```
-
-If you see a centered card with styled buttons, hover effects work, and the responsive text appears/disappears when you resize the browser — Tailwind v4 is working correctly.
+Check the network tab in your browser's DevTools — the CSS file should be small. If it is unexpectedly large, check for dynamic class names that Tailwind cannot detect.
 
 ## Troubleshooting Common Setup Issues
 
@@ -474,6 +652,7 @@ If you see a centered card with styled buttons, hover effects work, and the resp
 2. **Check that `app.css` is imported in `+layout.svelte`.** Without this import, no Tailwind styles will load.
 3. **Check the CSS file contains `@import 'tailwindcss'`.** This is the only required line.
 4. **Restart the dev server.** After initial setup, a fresh `npm run dev` is sometimes needed.
+5. **Check for `tailwind.config.js`.** If present from a v3 setup, it might conflict. Delete it.
 
 ### IntelliSense not working in .svelte files
 
@@ -489,7 +668,7 @@ If you see a centered card with styled buttons, hover effects work, and the resp
 
 ### Classes working in dev but missing in production
 
-This happens when class names are dynamically constructed (string interpolation). Always use complete class names so the scanner can find them. If you must use dynamic values, add a safelist comment or `@source` directive.
+This happens when class names are dynamically constructed (string interpolation). Always use complete class names so the scanner can find them. If you must use dynamic values, use the `@source` directive or explicit safelist.
 
 ### Svelte scoped styles overriding Tailwind
 
@@ -499,25 +678,30 @@ Svelte's scoped styles have higher specificity. If you set `color: red` in a `<s
 
 Follow the installation steps to add Tailwind v4 to your SvelteKit project. Complete this checklist:
 
-1. Install `tailwindcss` and `@tailwindcss/vite`. Add the Vite plugin to `vite.config.ts`.
+1. Install `tailwindcss` and `@tailwindcss/vite`. Add the Vite plugin to `vite.config.ts` (before `sveltekit()`).
 2. Create `src/app.css` with `@import 'tailwindcss'` and import it in `+layout.svelte`.
-3. Add custom brand colors using `@theme` — at least a primary, secondary, and accent color.
-4. Install the Tailwind CSS IntelliSense extension and configure `.vscode/settings.json`.
-5. Install `prettier-plugin-tailwindcss` and `prettier-plugin-svelte`. Verify class sorting works.
+3. Add custom brand colors using `@theme` — at least a primary, secondary, and accent color. Add a custom `--font-heading` and a custom `--radius-card`.
+4. Install the Tailwind CSS IntelliSense extension and configure `.vscode/settings.json`. Verify autocomplete works for both default and custom classes.
+5. Install `prettier-plugin-tailwindcss` and `prettier-plugin-svelte`. Verify class sorting works by writing an unsorted class list and running `npx prettier --write`.
 6. Build a hero section using Tailwind utilities and your custom colors. Verify hover states and responsive prefixes (`sm:`, `md:`, `lg:`) work correctly.
-7. Run `npm run build` and check the production CSS size in the network tab.
+7. Create a `<Button>` component with `variant` and `size` props instead of using `@apply`. Include at least three variants (primary, secondary, danger).
+8. Build a card component that mixes Tailwind utilities (layout, spacing) with scoped CSS (pseudo-elements, complex animations). Verify both systems work together.
+9. Add a conditional class that switches between two visual states using a ternary. Verify both states appear correctly in production (`npm run build && npm run preview`).
+10. Run `npm run build` and check the production CSS size in the network tab. It should be under 20KB gzipped.
 
 ## Key Takeaways
 
 - Tailwind v4 uses `@import 'tailwindcss'` in your CSS file — no config file needed
-- Install `tailwindcss` and `@tailwindcss/vite` as the only dependencies
-- Add the Vite plugin to `vite.config.ts` **before** the SvelteKit plugin
+- Install `tailwindcss` and `@tailwindcss/vite` as the only dependencies — no PostCSS required
+- Add the Vite plugin to `vite.config.ts` **before** the SvelteKit plugin — order matters
 - Tailwind v4 automatically detects content files through the Vite module graph — no `content` config needed
-- Customize your theme with the `@theme` directive directly in CSS — each variable becomes a utility
+- Customize your theme with the `@theme` directive directly in CSS — each variable becomes a utility based on its prefix (`--color-*` → `text-*`, `bg-*`, etc.)
+- Use `--color-*: initial` to replace the entire default palette with your own
 - Use `@source` to scan additional files outside the Vite module graph
 - Install the VS Code IntelliSense extension and configure `includeLanguages` for `.svelte` support
 - Use `prettier-plugin-tailwindcss` for consistent class ordering — it must come after `prettier-plugin-svelte`
-- Extract Svelte components for reusable patterns. Reserve `@apply` for base element styles only
-- Tailwind utilities and Svelte scoped styles coexist naturally — use each where it is strongest
-- Always use complete class name strings — Tailwind's scanner cannot evaluate dynamic expressions
+- Extract Svelte components for reusable patterns with props, logic, and types. Reserve `@apply` for base element styles and third-party overrides only
+- Tailwind utilities and Svelte scoped styles coexist naturally — but scoped styles have higher specificity and will override Tailwind classes on the same property
+- Always use complete, static class name strings — Tailwind's scanner cannot evaluate dynamic expressions like `text-${color}-500`
 - Import `app.css` in your root `+layout.svelte` to apply styles globally
+- Production builds automatically purge unused classes — expect 5-15KB gzipped CSS

@@ -20,6 +20,55 @@ Here is the cascade's priority order, from lowest to highest:
 
 When two rules have equal priority, the one that appears *later* in the source code wins. This is not random — it is deterministic and predictable. The moment you understand this, CSS stops feeling like a guessing game.
 
+### The Cascade in Practice — Debugging Mental Model
+
+Imagine you have a paragraph that appears red when you expected it to be blue. A principal engineer does not guess. They open DevTools, inspect the element, and read the cascade:
+
+```css
+/* Browser default */
+p { color: black; }                /* Lowest priority */
+
+/* Your global stylesheet (app.css) */
+p { color: navy; }                 /* Overrides browser default */
+
+/* Scoped component style */
+p { color: blue; }                 /* Overrides global (scoped has a hash class too) */
+
+/* Inline style on the element */
+<p style="color: red;">            /* Overrides everything except !important */
+```
+
+In DevTools, you will see all four rules listed with strikethroughs on the ones that lost. The winner is always deterministic. If your style is not applying, the cascade is telling you *why* — you just need to read it.
+
+### WRONG vs CORRECT: Fighting the Cascade
+
+```css
+/* WRONG — adding !important to force your style */
+p {
+  color: blue !important;  /* "It works now" but you have created a landmine */
+}
+
+/* Later, someone needs to override it... */
+p.special {
+  color: red !important;  /* Now you need !important to beat !important */
+}
+/* This spirals into an unwinnable specificity arms race. */
+```
+
+```css
+/* CORRECT — understand why your rule is losing and fix the real problem */
+
+/* If an inline style is winning, remove the inline style */
+/* If a more specific selector is winning, match or exceed its specificity */
+/* If a later rule is winning, reorder your CSS */
+
+.special-paragraph {
+  color: red;  /* A class selector beats a plain element selector cleanly */
+}
+```
+
+The fix is never `!important`. The fix is understanding which rule is winning and adjusting your selector strategy.
+
 ## Specificity — The Tiebreaker
 
 When multiple CSS rules target the same element, the browser needs a tiebreaker. That tiebreaker is **specificity** — a scoring system that determines which selector is more "specific."
@@ -37,6 +86,45 @@ Think of specificity as a three-digit score: `(IDs, Classes, Elements)`.
 Higher scores win. An ID (`1-0-0`) will always beat any number of classes (`0-99-0`), and a class will always beat any number of element selectors. This is why styling with IDs makes things hard to override later — they carry too much specificity weight.
 
 **The practical rule:** style with classes. They give you enough specificity to be precise without making overrides painful.
+
+### Specificity Gotcha: The `:where()` and `:is()` Pseudo-Classes
+
+Modern CSS gives you tools to control specificity explicitly:
+
+```css
+/* :is() takes the specificity of its MOST specific argument */
+:is(.card, #sidebar) p {
+  color: red;
+  /* Specificity: 1-0-1 because #sidebar is the most specific argument */
+}
+
+/* :where() always has ZERO specificity — it acts as a specificity eraser */
+:where(.card, #sidebar) p {
+  color: blue;
+  /* Specificity: 0-0-1 — only the `p` element selector counts */
+}
+```
+
+`:where()` is incredibly useful for writing reset styles or defaults that are easy to override. Tailwind CSS uses `:where()` extensively in its base layer so your custom styles always win.
+
+### The Full Specificity Table
+
+| Selector | ID | Class | Element | Total |
+|----------|-----|-------|---------|-------|
+| `*` | 0 | 0 | 0 | `0-0-0` |
+| `p` | 0 | 0 | 1 | `0-0-1` |
+| `p::before` | 0 | 0 | 2 | `0-0-2` |
+| `.card` | 0 | 1 | 0 | `0-1-0` |
+| `p.card` | 0 | 1 | 1 | `0-1-1` |
+| `.card.active` | 0 | 2 | 0 | `0-2-0` |
+| `[type="email"]` | 0 | 1 | 0 | `0-1-0` |
+| `:hover` | 0 | 1 | 0 | `0-1-0` |
+| `#header` | 1 | 0 | 0 | `1-0-0` |
+| `#header .nav a` | 1 | 1 | 1 | `1-1-1` |
+| Inline `style=""` | — | — | — | Beats all selectors |
+| `!important` | — | — | — | Beats inline styles |
+
+Notice that attribute selectors (`[type="email"]`) and pseudo-classes (`:hover`, `:focus`) count the same as a class. Pseudo-elements (`::before`, `::after`) count as elements.
 
 ## How Svelte Scopes CSS (and Why It Matters)
 
@@ -62,7 +150,57 @@ Svelte solves this elegantly. When you write styles in a `<style>` tag, Svelte's
 
 That `.svelte-abc123` class is automatically generated and unique to this component. Your `p` style physically cannot affect paragraphs in other components because they won't have that class. No naming conventions needed, no BEM methodology, no CSS Modules configuration — scoping just works.
 
-If you *do* need to reach into a child component's DOM (say, styling a third-party component), Svelte gives you the `:global()` modifier. But reach for it rarely — it's an escape hatch, not a default.
+### The `:global()` Escape Hatch
+
+If you *do* need to reach into a child component's DOM (say, styling a third-party component), Svelte gives you the `:global()` modifier:
+
+```svelte
+<style>
+  /* Only affects <p> inside THIS component */
+  p { color: navy; }
+
+  /* Affects ALL <p> elements on the page — use sparingly */
+  :global(p) { margin: 0; }
+
+  /* Targets a child component's element — scoped to descendants of this component */
+  .wrapper :global(.third-party-class) {
+    border: 1px solid red;
+  }
+</style>
+```
+
+The third pattern — `.wrapper :global(.third-party-class)` — is the most useful. It says "inside `.wrapper` in *this* component, style elements with `.third-party-class` even if they come from a child component." The `.wrapper` part keeps the global reach scoped to your component's subtree.
+
+### WRONG vs CORRECT: Styling Child Components
+
+```svelte
+<!-- WRONG — `:global()` on the entire selector leaks globally -->
+<div class="parent">
+  <ChildComponent />
+</div>
+
+<style>
+  :global(.child-button) {
+    background: red;
+    /* This styles EVERY .child-button on the entire page,
+       not just the ones inside this component */
+  }
+</style>
+```
+
+```svelte
+<!-- CORRECT — scope the global selector to a local parent -->
+<div class="parent">
+  <ChildComponent />
+</div>
+
+<style>
+  .parent :global(.child-button) {
+    background: red;
+    /* Only .child-button elements inside .parent in THIS component */
+  }
+</style>
+```
 
 ## CSS Selectors — Your Targeting System
 
@@ -126,7 +264,49 @@ A **selector** tells CSS which elements to style. Think of selectors as a query 
 </style>
 ```
 
-**When to use which:**
+### Combinator Selectors — Targeting by Relationship
+
+Beyond simple selectors, CSS provides combinators that target elements based on their relationship to other elements:
+
+```svelte
+<div class="article">
+  <p>Direct child paragraph.</p>
+  <blockquote>
+    <p>Nested paragraph inside a blockquote.</p>
+  </blockquote>
+  <p>Another direct child.</p>
+  <p>And another — adjacent to the one above.</p>
+</div>
+
+<style>
+  /* Descendant combinator (space) — ALL <p> inside .article, at any depth */
+  .article p {
+    line-height: 1.6;
+  }
+
+  /* Child combinator (>) — only DIRECT children, not nested ones */
+  .article > p {
+    font-size: 1.1rem;
+    /* The <p> inside <blockquote> is NOT styled */
+  }
+
+  /* Adjacent sibling (+) — the <p> immediately after another <p> */
+  p + p {
+    margin-top: 1rem;
+    /* Only "And another" gets this margin — it follows a <p> directly */
+  }
+
+  /* General sibling (~) — all <p> that follow a <blockquote> */
+  blockquote ~ p {
+    color: #666;
+    /* Both paragraphs after the blockquote are styled */
+  }
+</style>
+```
+
+Understanding combinators prevents over-specific selectors. Instead of adding a class to every element, use structure to your advantage.
+
+**When to use which selector:**
 
 | Selector Type | When to Use |
 |---------------|-------------|
@@ -136,6 +316,8 @@ A **selector** tells CSS which elements to style. Think of selectors as a query 
 | Attribute (`[type="email"]`) | Styling form inputs by type, or elements with data attributes |
 | Pseudo-class (`:hover`, `:focus`) | Interactive states, structural selection (`:first-child`, `:nth-child`) |
 | Pseudo-element (`::before`, `::after`) | Decorative elements, custom bullets, underline effects |
+| Child combinator (`>`) | When you need to style only direct children, not all descendants |
+| Adjacent sibling (`+`) | Spacing between consecutive elements of the same type |
 
 ## The Box Model — How Every Element Takes Up Space
 
@@ -175,22 +357,70 @@ The fix is `box-sizing: border-box`, which makes `width` include padding and bor
 
 This is universally considered best practice. Every CSS reset, every framework, every professional project uses it. Set it once at the top of your project and forget about it.
 
+### Margin Collapse — The Hidden Box Model Gotcha
+
+Vertical margins between adjacent elements do not add up — they **collapse** to the larger of the two. This is one of the most confusing behaviors in CSS:
+
 ```svelte
-<div class="card">
-  <p>This card is exactly 300px wide, padding included.</p>
+<div class="box-a">Box A</div>
+<div class="box-b">Box B</div>
+
+<style>
+  .box-a {
+    margin-bottom: 30px;
+  }
+
+  .box-b {
+    margin-top: 20px;
+  }
+
+  /* You might expect 50px of space between them.
+     The actual space is 30px — the margins COLLAPSE
+     to the larger of the two. */
+</style>
+```
+
+Margin collapse only happens vertically, and only between block-level elements in the normal flow. It does NOT happen with:
+- Flexbox children (`display: flex` on the parent)
+- Grid children (`display: grid` on the parent)
+- Elements with `overflow` other than `visible`
+- Floated elements
+- Absolutely positioned elements
+
+This is why experienced engineers prefer `gap` in flex/grid layouts — it is predictable and never collapses.
+
+```svelte
+<div class="stack">
+  <div>Item 1</div>
+  <div>Item 2</div>
+  <div>Item 3</div>
 </div>
 
 <style>
-  .card {
-    width: 300px;
-    padding: 24px;
-    border: 2px solid #dee2e6;
-    margin: 16px 0;
-    border-radius: 8px;
-    /* With border-box, the total width is 300px, not 300 + 48 + 4 */
+  /* WRONG — margins collapse unpredictably */
+  .stack > div {
+    margin-bottom: 1rem;
+  }
+
+  /* CORRECT — gap never collapses */
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
   }
 </style>
 ```
+
+### Padding vs Margin — The Decision Guide
+
+| Use Padding When... | Use Margin When... |
+|----------------------|---------------------|
+| You want space *inside* the element's background | You want space *between* elements |
+| You want to increase the clickable area of a button | You want to push elements apart |
+| The background color should extend into the spacing | The background color should NOT extend |
+| You are creating internal spacing in a card or container | You are creating external spacing between cards |
+
+A practical way to think about it: padding is *interior decoration*, margin is *furniture arrangement*.
 
 ## Units — px, rem, em, %, vh/vw
 
@@ -203,8 +433,26 @@ CSS has many unit types. Using the right one in the right context makes your des
 | `em` | Parent element's font size | Spacing that should scale *with the element's text* |
 | `%` | Parent element's dimension | Widths that should fill a proportion of the container |
 | `vh` / `vw` | Viewport height / width | Full-screen sections, viewport-relative sizing |
+| `dvh` / `dvw` | Dynamic viewport (mobile-aware) | Mobile full-screen — accounts for browser chrome |
+| `ch` | Width of the "0" character | Line length limits for readability |
 
 **Why `rem` is usually the right default:** `rem` scales with the user's browser font-size setting. If someone sets their default to 20px (for accessibility), your `1.5rem` heading grows proportionally. Pixels do not — they stay fixed, ignoring the user's preference. Using `rem` for font sizes and spacing means your design respects accessibility settings for free.
+
+### The `dvh` Unit — Fixing Mobile Viewport Issues
+
+On mobile browsers, `100vh` includes the area behind the browser's address bar and toolbar. This means a `100vh` element extends behind the browser chrome, causing content to be cut off. The `dvh` (dynamic viewport height) unit solves this:
+
+```css
+/* WRONG — on mobile, content hides behind the address bar */
+.hero {
+  height: 100vh;
+}
+
+/* CORRECT — adjusts dynamically as the browser chrome shows/hides */
+.hero {
+  height: 100dvh;
+}
+```
 
 ```svelte
 <div class="hero">
@@ -214,21 +462,32 @@ CSS has many unit types. Using the right one in the right context makes your des
 
 <style>
   .hero {
-    padding: 2rem;           /* Scales with root font size */
-    min-height: 50vh;        /* Half the viewport height */
-    border-bottom: 1px solid #ddd; /* Fine detail — pixels are fine */
+    padding: 2rem;
+    min-height: 50dvh;          /* Mobile-safe viewport unit */
+    border-bottom: 1px solid #ddd;
   }
 
   h1 {
-    font-size: 2.5rem;       /* Scales with user preferences */
-    margin-bottom: 0.5em;    /* Scales with this element's own font size */
+    font-size: 2.5rem;
+    margin-bottom: 0.5em;       /* Scales with this element's own font size */
   }
 
   p {
-    max-width: 60%;          /* Relative to parent container */
+    max-width: 65ch;            /* Optimal reading width: ~65 characters */
     font-size: 1.125rem;
   }
 </style>
+```
+
+### The `ch` Unit — Readable Line Lengths
+
+Typography research shows that lines of text are most readable between 45-75 characters. The `ch` unit makes this easy:
+
+```css
+.prose {
+  max-width: 65ch;  /* Roughly 65 characters wide */
+  /* This adjusts automatically with the font size and font family */
+}
 ```
 
 ## Colors — hex, rgb, and hsl
@@ -239,7 +498,9 @@ CSS gives you several color formats. They all describe the same colors, but the 
 
 **RGB (`rgb(52, 152, 219)`)** — red, green, blue values from 0 to 255. Slightly more readable, but still hard to answer "how do I make this 20% lighter?"
 
-**HSL (`hsl(204, 70%, 53%)`)** — hue (0-360, a position on the color wheel), saturation (0-100%, gray to vivid), lightness (0-100%, black to white). This is the most intuitive for programmatic work because each axis is independently meaningful:
+**HSL (`hsl(204, 70%, 53%)`)** — hue (0-360, a position on the color wheel), saturation (0-100%, gray to vivid), lightness (0-100%, black to white). This is the most intuitive for programmatic work because each axis is independently meaningful.
+
+**oklch (`oklch(65% 0.2 240)`)** — the modern CSS color format. Uses perceptually uniform lightness (0-100%), chroma (0-0.4, how vivid), and hue (0-360). Unlike HSL, `oklch` lightness actually matches human perception — `50%` lightness in oklch looks the same brightness regardless of hue. HSL's lightness varies visually across hues (yellow looks lighter than blue at the same HSL lightness).
 
 ```svelte
 <div class="swatches">
@@ -270,6 +531,20 @@ CSS gives you several color formats. They all describe the same colors, but the 
 ```
 
 Want to build a cohesive color palette? Pick a hue, then vary saturation and lightness. Want a complementary color? Add 180 to the hue. Analogous colors? Add 30. HSL makes color theory directly expressible in code.
+
+### Opacity and Alpha Channels
+
+Every color format supports an alpha (transparency) channel:
+
+```css
+/* All equivalent: 50% transparent blue */
+background: #3498db80;            /* Hex with alpha */
+background: rgb(52 152 219 / 50%);  /* Modern RGB syntax */
+background: hsl(204 70% 53% / 50%); /* Modern HSL syntax */
+background: oklch(65% 0.2 240 / 50%); /* oklch with alpha */
+```
+
+The modern syntax using `/` for alpha is cleaner and more consistent across all color formats. Prefer it over the older `rgba()` / `hsla()` function names.
 
 ## CSS Custom Properties (Variables)
 
@@ -308,11 +583,32 @@ CSS custom properties let you define reusable values. They are declared with `--
 </style>
 ```
 
+### Fallback Values — Defense Against Missing Variables
+
+The `var()` function accepts a second argument as a fallback if the variable is not defined:
+
+```css
+.card {
+  /* If --accent-color is not set by any ancestor, use blue */
+  border-left: 4px solid var(--accent-color, hsl(210, 70%, 50%));
+
+  /* Fallbacks can even reference other custom properties */
+  color: var(--card-text, var(--text-primary, #333));
+}
+```
+
+Always provide fallbacks in reusable components. The consumer might forget to define the variable, and a fallback prevents a broken UI.
+
+### Custom Properties + Svelte Component Theming
+
 Custom properties compose beautifully with Svelte's component model. A parent component can set a custom property, and a child component can read it — giving you a clean theming API without any props:
 
 ```svelte
 <!-- Parent.svelte -->
 <div class="theme-warm">
+  <Card />
+</div>
+<div class="theme-cool">
   <Card />
 </div>
 
@@ -321,8 +617,14 @@ Custom properties compose beautifully with Svelte's component model. A parent co
     --accent-color: hsl(15, 80%, 55%);
     --surface-color: hsl(15, 30%, 97%);
   }
+  .theme-cool {
+    --accent-color: hsl(210, 80%, 55%);
+    --surface-color: hsl(210, 30%, 97%);
+  }
 </style>
+```
 
+```svelte
 <!-- Card.svelte -->
 <div class="card">
   <h2>I inherit the theme</h2>
@@ -330,7 +632,6 @@ Custom properties compose beautifully with Svelte's component model. A parent co
 
 <style>
   .card {
-    /* Falls back to blue if no ancestor defines --accent-color */
     border-left: 4px solid var(--accent-color, hsl(210, 70%, 50%));
     background: var(--surface-color, white);
     padding: 1.5rem;
@@ -339,6 +640,39 @@ Custom properties compose beautifully with Svelte's component model. A parent co
 ```
 
 This pattern — defining CSS custom properties on a parent and consuming them in children — is how professional Svelte applications implement theming. It works through the DOM's natural inheritance, requires no JavaScript, and keeps your components decoupled.
+
+### Dynamic Custom Properties with Svelte
+
+Svelte lets you bind JavaScript values to custom properties using the `style:` directive:
+
+```svelte
+<script>
+  let progress = $state(65);
+</script>
+
+<div class="progress-bar" style:--progress="{progress}%">
+  <div class="fill"></div>
+</div>
+
+<style>
+  .progress-bar {
+    width: 100%;
+    height: 8px;
+    background: #e2e8f0;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .fill {
+    height: 100%;
+    width: var(--progress);
+    background: hsl(210, 70%, 50%);
+    transition: width 0.3s ease;
+  }
+</style>
+```
+
+This bridges JavaScript reactivity and CSS animation — the `--progress` custom property updates when the `$state` changes, and CSS handles the visual transition.
 
 ## Real Example: Styling a Navigation Bar
 
@@ -414,7 +748,94 @@ Let's put everything together. Here is a navigation bar with proper spacing, col
 </style>
 ```
 
-Notice the patterns: CSS custom properties at the top for consistent theming, `rem` units for spacing, HSL for easy color relationships, `transition` for smooth hover effects, and `:focus-visible` for keyboard accessibility. This is production-quality CSS.
+Notice the patterns: CSS custom properties at the top for consistent theming, `rem` units for spacing, HSL for easy color relationships, `transition` for smooth hover effects, and `:focus-visible` for keyboard accessibility.
+
+### Why `:focus-visible` Instead of `:focus`
+
+`:focus` fires on every focus event — including mouse clicks. This means buttons and links get focus rings when clicked, which looks ugly and confuses visual users. `:focus-visible` only fires when the browser determines the user is navigating with a keyboard (Tab key, arrow keys). This gives keyboard users the visual feedback they need without cluttering the UI for mouse users.
+
+```css
+/* WRONG — focus ring appears on mouse click too */
+.nav-link:focus {
+  outline: 2px solid blue;
+}
+
+/* CORRECT — focus ring only for keyboard navigation */
+.nav-link:focus-visible {
+  outline: 2px solid blue;
+  outline-offset: 2px;
+}
+```
+
+## CSS Transitions and Animations
+
+CSS transitions let you smoothly animate property changes. They are essential for making UIs feel responsive and polished:
+
+```svelte
+<button class="cta-button">
+  Get Started
+</button>
+
+<style>
+  .cta-button {
+    padding: 0.75rem 1.5rem;
+    background: hsl(210, 70%, 50%);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    cursor: pointer;
+
+    /* Transition multiple properties */
+    transition:
+      background-color 0.2s ease,
+      transform 0.15s ease,
+      box-shadow 0.2s ease;
+  }
+
+  .cta-button:hover {
+    background: hsl(210, 70%, 45%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px hsl(210 70% 50% / 30%);
+  }
+
+  .cta-button:active {
+    transform: translateY(0);
+    box-shadow: none;
+  }
+</style>
+```
+
+### Performance Tip: Only Animate Cheap Properties
+
+Some CSS properties are expensive to animate because they trigger layout recalculation (reflow). Others are cheap because the GPU handles them:
+
+| Cheap (GPU-accelerated) | Expensive (triggers reflow) |
+|--------------------------|------------------------------|
+| `transform` | `width`, `height` |
+| `opacity` | `margin`, `padding` |
+| `filter` | `top`, `left`, `right`, `bottom` |
+| `clip-path` | `font-size` |
+
+```css
+/* WRONG — animating width triggers reflow on every frame */
+.drawer {
+  width: 0;
+  transition: width 0.3s;
+}
+.drawer.open {
+  width: 300px;
+}
+
+/* CORRECT — animating transform is GPU-accelerated */
+.drawer {
+  transform: translateX(-100%);
+  transition: transform 0.3s;
+}
+.drawer.open {
+  transform: translateX(0);
+}
+```
 
 ## Common Pitfalls
 
@@ -428,26 +849,40 @@ Notice the patterns: CSS custom properties at the top for consistent theming, `r
 
 **Forgetting `box-sizing: border-box`.** If your element is mysteriously wider than the width you set, this is almost certainly the cause. Set it globally and save yourself hours of debugging.
 
+**Not using `gap` in flex/grid layouts.** If you are using `margin` to space flex or grid children, switch to `gap`. It does not collapse, it does not need a negative margin hack for the first/last child, and it works bidirectionally in grid.
+
+**Forgetting `min-width: 0` in flex children.** Flex children refuse to shrink below their content's minimum width by default. If a long word or image overflows a flex layout, add `min-width: 0` to the flex child.
+
 ## Try It
 
 Build a "Profile Card" component:
 
 1. Set `box-sizing: border-box` globally
 2. Create a card with a colored left border (use HSL for the color)
-3. Inside, add a name heading, a role paragraph, and a list of skills
+3. Inside, add a name heading, a role paragraph, and a list of skills as badges
 4. Use CSS custom properties for your color palette (define them on the card, use them throughout)
-5. Add a `:hover` effect that subtly changes the card's shadow or border color
+5. Add a `:hover` effect that subtly changes the card's shadow and border color — animate only `transform`, `box-shadow`, and `border-color` (cheap properties)
 6. Use `rem` for font sizes and spacing, `px` only for borders
+7. Use `:focus-visible` (not `:focus`) on any interactive elements
+8. Add a progress bar using a CSS custom property bound to a Svelte `$state` value via `style:--progress`
+9. Style skill badges using combinators — the first badge should have no left margin, and consecutive badges should have a gap
 
-Stretch goal: create two cards side by side with different color themes by overriding the custom properties on each card's container.
+Stretch goal: create two cards side by side with different color themes by overriding the custom properties on each card's container. Add a dark mode variant using a `.theme-dark` class that overrides the same custom properties.
 
 ## Key Takeaways
 
 - The **cascade** determines which styles win: later rules and higher specificity beat earlier, lower-specificity ones
 - **Specificity** is scored as (IDs, Classes, Elements) — style with classes to keep specificity manageable
+- `:where()` has zero specificity (great for defaults); `:is()` takes the highest specificity of its arguments
 - Svelte **scopes CSS** by adding unique hash-based classes at compile time — your styles cannot leak
+- Use `.parent :global(.child-class)` to style child component elements without leaking globally
 - The **box model** has four layers: content, padding, border, margin. Always set `box-sizing: border-box`
-- Use **`rem`** for font sizes and spacing (it respects user preferences), **`px`** for fine details like borders
-- **HSL** is the most intuitive color format — vary lightness for shades, shift hue for palettes
+- Vertical **margins collapse** — use `gap` in flex/grid layouts to avoid this entirely
+- Use **`rem`** for font sizes and spacing (it respects user preferences), **`px`** for fine details like borders, and **`ch`** for readable line widths
+- Use **`dvh`** instead of `vh` on mobile to account for browser chrome
+- **HSL** is the most intuitive color format — vary lightness for shades, shift hue for palettes. **oklch** is more perceptually accurate
 - **CSS custom properties** cascade through the DOM and pair perfectly with Svelte's component model for theming
+- Bind JavaScript values to custom properties with `style:--prop` for dynamic CSS driven by reactive state
+- Only animate **cheap properties** (`transform`, `opacity`, `filter`) — avoid animating `width`, `height`, `margin`
+- Use `:focus-visible` instead of `:focus` for keyboard-only focus indicators
 - Never reach for `!important` — understand specificity and the cascade instead

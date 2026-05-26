@@ -18,6 +18,12 @@ This co-location principle scales. In a 500-component application, you never won
 
 Components also establish **boundaries**. Each component manages its own state. CSS defined inside a component cannot leak out and accidentally break another component. Data flows through explicit channels (props in, events/callbacks out). These boundaries are what make large applications manageable.
 
+### Why Components Are the Right Abstraction
+
+Components map naturally to how we think about UIs. Open any website and you instinctively see components: the navigation bar, the search input, each product card, the footer. You do not think "there's a `<div>` with an `<ul>` inside it with `<li>` elements" — you think "that's a navigation menu." Components let you write code at the same level of abstraction as your mental model.
+
+This is also why components compose so well. A `<ProductPage>` contains a `<ProductGallery>`, a `<PriceTag>`, an `<AddToCartButton>`, and a `<ReviewList>`. Each is independently understandable. The page component orchestrates them. If the gallery needs a redesign, you change one file. The rest of the page is untouched.
+
 ## The `.svelte` File Anatomy
 
 Every `.svelte` file can have up to three top-level sections, all optional:
@@ -50,11 +56,35 @@ The order does not technically matter, but the convention is `<script>` first, t
 
 **Key details about each section:**
 
-- **`<script>`** — Runs once when the component is created (per instance). Variables declared here are the component's state. Imports happen here. You can have at most one `<script>` block (there is also `<script context="module">` for code shared across all instances, but that is an advanced topic for later).
+- **`<script>`** — Runs once when the component is created (per instance). Variables declared here are the component's state. Imports happen here. You can have at most one `<script>` block (there is also `<script module>` for code shared across all instances, but that is an advanced topic for later).
 
 - **Markup** — Plain HTML with Svelte's template syntax (`{expressions}`, `{#if}`, `{#each}`, etc.). This is the only section that *must* exist — a `.svelte` file with just `<p>Hello</p>` is a valid component.
 
 - **`<style>`** — Standard CSS, but scoped. Svelte's compiler rewrites selectors to include a unique hash class, so `.card { ... }` in one component will never affect `.card` in another. If you need global styles, use the `:global()` modifier.
+
+### What Runs When — The Component Lifecycle
+
+Understanding when code runs prevents subtle bugs:
+
+```svelte
+<script>
+  // ALL of this runs ONCE, when the component is first created
+  import Button from '$lib/components/Button.svelte';
+
+  let count = $state(0);          // State initialized once
+  const doubled = $derived(count * 2);  // Derived values recompute automatically
+
+  console.log('Component created');  // Runs once per instance
+
+  // $effect runs after the component is mounted to the DOM
+  $effect(() => {
+    console.log('Count is now:', count);
+    // This runs on mount AND whenever count changes
+  });
+</script>
+```
+
+The `<script>` block is not a "render function" that runs on every update. It runs once. Reactive updates happen through the rune system (`$state`, `$derived`, `$effect`), which tracks changes at a granular level.
 
 ## Creating Your First Component
 
@@ -109,6 +139,25 @@ This renders three buttons, each using the HTML and CSS from `Button.svelte`. Ch
 
 **Why capital letters?** HTML elements are lowercase (`<div>`, `<button>`, `<span>`). Svelte uses the capital letter convention to know that `<Button />` is a component reference, not an HTML `<button>` element. This is a hard rule — `<button />` creates an HTML button; `<Button />` instantiates your component.
 
+### WRONG vs CORRECT: Component Usage
+
+```svelte
+<!-- WRONG — lowercase creates an HTML element, not your component -->
+<script>
+  import button from './Button.svelte';  // lowercase import
+</script>
+<button />  <!-- This creates an HTML <button>, not your Button component -->
+
+<!-- WRONG — missing import -->
+<Button />  <!-- Error: Button is not defined -->
+
+<!-- CORRECT — PascalCase import and usage -->
+<script>
+  import Button from './Button.svelte';
+</script>
+<Button />  <!-- Instantiates your Button component -->
+```
+
 **Self-closing tags**: Components can use self-closing syntax (`<Button />`) when they have no children. If a component accepts children (via snippets), you use opening and closing tags: `<Card>content here</Card>`.
 
 ## The Component Tree
@@ -135,6 +184,25 @@ App
 Data flows **down** this tree through props (parent passes data to child). Actions flow **up** through callbacks (child calls a function that parent provided). This unidirectional flow is what makes applications predictable and debuggable.
 
 Every SvelteKit application has an implicit root: the layout components. Your `+layout.svelte` wraps your `+page.svelte`, which contains your components. Understanding this tree helps you reason about where state should live — typically at the lowest common ancestor of all components that need it.
+
+### The Component Tree in SvelteKit
+
+```
++layout.svelte (root layout)
+  └── +layout.svelte (nested layout, e.g., /dashboard)
+        └── +page.svelte (the page)
+              ├── Sidebar (your component)
+              │     ├── NavItem
+              │     └── NavItem
+              └── MainContent (your component)
+                    ├── StatCard
+                    ├── StatCard
+                    └── ActivityFeed
+                          ├── ActivityItem
+                          └── ActivityItem
+```
+
+SvelteKit's layout/page structure is itself a component tree. Your custom components nest inside SvelteKit's route components.
 
 ## Component Naming Conventions
 
@@ -211,6 +279,21 @@ Now import multiple components cleanly:
 </script>
 ```
 
+### When NOT to Use Barrel Exports
+
+Barrel exports can hurt tree-shaking. If you import one component from a barrel, bundlers may include all exported components. For large component libraries, prefer direct imports:
+
+```svelte
+<!-- For large libraries, prefer direct imports -->
+<script>
+  import Button from '$lib/components/ui/Button.svelte';
+  import Badge from '$lib/components/ui/Badge.svelte';
+  <!-- Only Button and Badge are included in the bundle -->
+</script>
+```
+
+For small sets of frequently used components (like your core UI kit), barrel exports are fine. For large libraries or rarely used components, import directly.
+
 ## What the Compiler Actually Does
 
 Svelte is a *compiler*, not a runtime framework. When you build your project, the Svelte compiler transforms each `.svelte` file into optimized JavaScript. Understanding this helps you reason about performance.
@@ -225,6 +308,19 @@ Here is what happens at a high level:
 The compiled output for a simple component is surprisingly small. A component with some state and a click handler might compile to 30-50 lines of efficient JavaScript. This is why Svelte applications tend to be smaller than equivalent React or Vue applications — there is no framework runtime to ship.
 
 **The practical implication**: You do not pay a per-component tax. Creating many small components does not bloat your bundle the way it might in a runtime framework. Feel free to extract components aggressively.
+
+### How Svelte Differs from React/Vue
+
+```
+React:                           Svelte:
+Component is a function    →     Component is a compiled module
+Returns JSX (virtual DOM)  →     Generates direct DOM operations
+React runtime diffs vDOM   →     No runtime — updates are surgical
+~40KB runtime overhead     →     ~2KB runtime overhead
+Re-renders entire component →    Updates only changed DOM nodes
+```
+
+This means Svelte components are faster by default — not because of clever optimization, but because they skip the virtual DOM diffing step entirely.
 
 ## Components with Logic
 
@@ -289,7 +385,26 @@ Each `<LikeButton />` you place on the page has its own independent `likes` coun
 <LikeButton />
 ```
 
-Clicking one button does not affect the other — each component instance has its own state. This is a core principle: component instances are isolated. Two `<LikeButton />` tags create two completely separate objects in memory, each tracking their own `likes` and `liked` values.
+Clicking one button does not affect the other — each component instance has its own state. This is a core principle: **component instances are isolated**. Two `<LikeButton />` tags create two completely separate objects in memory, each tracking their own `likes` and `liked` values.
+
+### Why Instance Isolation Matters
+
+Instance isolation means you can confidently reuse components without worrying about shared state:
+
+```svelte
+<script>
+  import Counter from './Counter.svelte';
+</script>
+
+<!-- These three counters are completely independent -->
+<Counter />   <!-- count: 0 -->
+<Counter />   <!-- count: 0 -->
+<Counter />   <!-- count: 0 -->
+
+<!-- Clicking the first counter does not affect the others -->
+```
+
+If you *want* components to share state (for example, a global notification count), you use different mechanisms — context or shared `.svelte.ts` modules. Instance isolation is the default, and shared state is opt-in.
 
 ## When to Extract a Component
 
@@ -307,6 +422,17 @@ Beginners often ask: "When should I create a new component?" Here are reliable h
 
 **The rule of thumb**: If you can give it a name and it makes your code clearer, extract it. If extracting it makes you jump between files to understand a simple flow, keep it inline.
 
+### The Component Size Sweet Spot
+
+| Lines | Assessment |
+|-------|------------|
+| 1-30 | Might be too small — consider keeping inline |
+| 30-150 | Sweet spot — focused, readable, fits on one screen |
+| 150-300 | Getting large — look for extraction opportunities |
+| 300+ | Almost certainly should be split |
+
+These are guidelines, not rules. A 400-line form page where everything is tightly coupled is better than 8 tiny components that require jumping between files to understand the form flow.
+
 ## Complete Example: Building a Component Library
 
 Let's build a small set of components that work together — a pattern you will use in every real project:
@@ -316,20 +442,19 @@ Let's build a small set of components that work together — a pattern you will 
 <script>
   let { src, alt, size = 'md' } = $props();
 
-  const sizes = {
-    sm: '32px',
-    md: '48px',
-    lg: '64px',
-    xl: '96px'
+  const sizeClasses = {
+    sm: 'avatar-sm',
+    md: 'avatar-md',
+    lg: 'avatar-lg',
+    xl: 'avatar-xl'
   };
 </script>
 
 <img
-  class="avatar avatar-{size}"
+  class="avatar {sizeClasses[size]}"
   {src}
   {alt}
-  width={sizes[size]}
-  height={sizes[size]}
+  loading="lazy"
 />
 
 <style>
@@ -350,9 +475,17 @@ Let's build a small set of components that work together — a pattern you will 
 <!-- src/lib/components/ui/Badge.svelte -->
 <script>
   let { text, variant = 'default' } = $props();
+
+  const variantClasses = {
+    default: 'badge-default',
+    success: 'badge-success',
+    warning: 'badge-warning',
+    danger: 'badge-danger',
+    info: 'badge-info'
+  };
 </script>
 
-<span class="badge badge-{variant}">{text}</span>
+<span class="badge {variantClasses[variant]}">{text}</span>
 
 <style>
   .badge {
@@ -376,16 +509,23 @@ Let's build a small set of components that work together — a pattern you will 
 ```svelte
 <!-- src/lib/components/ui/Card.svelte -->
 <script>
-  let { variant = 'default' } = $props();
+  import type { Snippet } from 'svelte';
+
+  let { variant = 'default', children }: {
+    variant?: 'default' | 'elevated' | 'outlined';
+    children: Snippet;
+  } = $props();
+
+  const variantClasses = {
+    default: '',
+    elevated: 'card-elevated',
+    outlined: 'card-outlined'
+  };
 </script>
 
-<div class="card card-{variant}">
+<div class="card {variantClasses[variant]}">
   {@render children()}
 </div>
-
-{#snippet children()}
-  <!-- fallback: empty card -->
-{/snippet}
 
 <style>
   .card {
@@ -490,41 +630,82 @@ And use it in a page:
 </style>
 ```
 
-This pattern — small UI primitives composed into feature components, used in pages — is how professional Svelte applications are structured. The UI components (`Avatar`, `Badge`, `Card`) are generic and reusable across the entire app. The feature components (`TeamMember`) combine them for specific use cases. The pages wire everything together with data.
+### The Architecture Pattern
+
+This pattern — small UI primitives composed into feature components, used in pages — is how professional Svelte applications are structured:
+
+```
+Layer 1: UI Primitives (Avatar, Badge, Card, Button, Input)
+  - Generic, reusable across the entire app
+  - No business logic
+  - Accept props for customization
+  
+Layer 2: Feature Components (TeamMember, TaskCard, StatPanel)
+  - Compose UI primitives for specific use cases
+  - May contain business logic
+  - Still reusable but more specific
+  
+Layer 3: Pages (+page.svelte)
+  - Wire data to feature components
+  - Handle routing, data loading, page-level layout
+  - Import from both layers
+```
+
+UI primitives are owned by the design team. Feature components are owned by the product team. Pages are owned by whoever owns the feature. This separation of concerns makes large teams productive.
 
 ## Common Mistakes and Edge Cases
 
 **Forgetting the capital letter**: `<button />` creates an HTML button. `<Button />` instantiates your component. This is the most common beginner mistake and produces confusing results — your component's styles and logic simply do not appear.
 
-**Circular imports**: Component A imports Component B, which imports Component A. Svelte will error or produce undefined behavior. If two components need to reference each other, restructure so a parent component orchestrates both.
+**Circular imports**: Component A imports Component B, which imports Component A. Svelte will error or produce undefined behavior. If two components need to reference each other, restructure so a parent component orchestrates both, or use lazy loading with `{#await import(...)}`.
 
 **Huge monolith components**: If your component exceeds 300 lines, it almost certainly should be split. The exception is complex form pages where splitting would obscure the data flow.
 
 **Empty `<script>` blocks**: If your component has no logic, omit the `<script>` block entirely. Adding an empty one is harmless but pointless.
 
+**Unused CSS warnings**: Svelte warns you about CSS selectors that do not match any elements in the component. This is a feature, not a bug — it catches dead CSS. If you genuinely need a selector that matches dynamic content (like `{@html}`), use `:global()`.
+
+**Prop spreading gotcha**: When you spread an object as props (`<TeamMember {...member} />`), any extra properties in the object are silently passed and ignored. This is fine for component usage but be careful with user-provided data — validate props on the receiving end.
+
+```svelte
+<!-- Prop spreading is convenient but can pass unexpected data -->
+<script>
+  const data = { name: 'Alex', role: 'Engineer', secretToken: 'abc123' };
+</script>
+
+<!-- secretToken is silently passed to TeamMember -->
+<TeamMember {...data} />
+<!-- If TeamMember renders `{...rest}` onto a DOM element, secretToken appears in the HTML -->
+```
+
 ## Try It
 
 Build a small component library with these four components:
 
-1. **`Header.svelte`** — A page header that accepts a `title` prop. Include a navigation bar with at least three links. Use flexbox to position the title on the left and links on the right.
+1. **`Header.svelte`** — A page header that accepts a `title` prop. Include a navigation bar with at least three links. Use flexbox to position the title on the left and links on the right. Add a `:focus-visible` style on the links.
 
-2. **`StatCard.svelte`** — A statistics card that accepts `label`, `value`, and `trend` props (trend is `"up"` or `"down"`). Display the value prominently with a colored arrow indicator for the trend.
+2. **`StatCard.svelte`** — A statistics card that accepts `label`, `value`, and `trend` props (trend is `"up"` or `"down"`). Display the value prominently with a colored arrow indicator for the trend. Use `class:` directives for conditional styling.
 
-3. **`UserList.svelte`** — A component that accepts an array of user objects and renders each one using an `Avatar` component you also create.
+3. **`UserList.svelte`** — A component that accepts an array of user objects via `$props()` and renders each one using an `Avatar` component you also create. Add a subtle hover effect on each user row.
 
-4. **`Dashboard.svelte`** — A main page component that imports all the above and arranges them in a grid layout. Use at least three `StatCard` instances and a `UserList`.
+4. **`Dashboard.svelte`** — A main page component that imports all the above and arranges them in a grid layout. Use at least three `StatCard` instances with different data and a `UserList` with mock users.
 
-Focus on file organization: place UI components in `$lib/components/ui/` and the Dashboard in `$lib/components/features/`.
+5. Organize everything in `$lib/components/ui/` and `$lib/components/features/`. Create barrel exports in `$lib/components/ui/index.ts`.
+
+6. Add at least one accessibility attribute (`aria-label`, `aria-pressed`, `role`) to each interactive component.
 
 ## Key Takeaways
 
 - A **component** is a `.svelte` file that bundles HTML, CSS, and optionally JavaScript into one self-contained unit
 - The file has three optional sections: `<script>` (logic), markup (HTML), and `<style>` (scoped CSS), conventionally in that order
+- The `<script>` block runs once per instance — it is not a render function that re-runs on updates
 - Import components with `import Name from './Name.svelte'` and use them like `<Name />`
 - Component names must start with a **capital letter** to distinguish them from HTML elements
-- Each component instance has its own **independent state** — instances do not share data
-- Svelte is a compiler that turns `.svelte` files into optimized JavaScript with no virtual DOM
+- Each component instance has its own **independent state** — instances do not share data unless you opt in with context or shared modules
+- Svelte is a compiler that turns `.svelte` files into optimized JavaScript with no virtual DOM — small components have minimal bundle cost
 - CSS is scoped by default — styles in one component cannot affect another
 - Organize components in `$lib/components/` and use the `$lib` alias for clean imports
-- Extract a component when you can name the concept, want to reuse it, or need to reduce file size
+- Use barrel exports for small, frequently used component sets; prefer direct imports for large libraries
+- Extract a component when you can name the concept, want to reuse it, or need to reduce file size — but avoid over-extraction
+- Structure your app in three layers: UI primitives, feature components, and pages
 - Compose small primitive components into larger feature components — this is the professional pattern

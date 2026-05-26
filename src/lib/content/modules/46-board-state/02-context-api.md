@@ -4,7 +4,7 @@ TeamBoard's board page has a deep component tree. The `BoardLayout` contains `Co
 
 This lesson builds three context systems for TeamBoard — board state, theme, and notifications — using typed Symbol keys, reactive getters, and the full Context API including `hasContext` and `getAllContexts`.
 
-## Why Context for TeamBoard
+## The Prop Drilling Problem
 
 Consider the component tree for a board page:
 
@@ -35,6 +35,25 @@ BoardLayout
 
 `TaskCard` needs the board state to handle drag-and-drop. `ColumnHeader` needs it for task counts. `AddTaskButton` needs user permissions to know if the current user can create tasks. `TaskDetailModal` needs all of the above plus the notification context for success toasts. Without context, you would thread these through 4-5 levels of props.
 
+### Why Prop Drilling Breaks Down
+
+```svelte
+<!-- WITHOUT CONTEXT — prop drilling through every level -->
+
+<!-- BoardLayout.svelte -->
+<ColumnList board={board} permissions={permissions} theme={theme} notifications={notifications} />
+
+<!-- ColumnList.svelte (does not use most of these — just passes them through) -->
+<Column {board} {permissions} {theme} {notifications} />
+
+<!-- Column.svelte (still passing through) -->
+<TaskCard {board} {permissions} {theme} {notifications} task={task} />
+
+<!-- TaskCard.svelte (finally uses board and permissions) -->
+```
+
+The problem is twofold. First, `ColumnList` and `Column` accept and pass props they never read — this is noise that obscures their actual API. Second, adding a new piece of shared data (say, a keyboard shortcut handler) requires modifying every intermediate component. Prop drilling violates the open/closed principle: adding a new feature should not require changing unrelated components.
+
 ## Board Context with Typed Symbol Keys
 
 > **Tip:** Svelte now provides `createContext()` as a newer alternative to `setContext`/`getContext`. It returns a `[get, set]` pair and handles Symbol keys automatically, reducing boilerplate. For example: `const [getBoard, setBoard] = createContext<BoardState>()`. The `setContext`/`getContext` pattern shown below remains fully supported.
@@ -58,6 +77,32 @@ export function setBoardContext(state: BoardState) {
 
 export function getBoardContext(): BoardState {
   return getContext<BoardState>(BOARD_KEY);
+}
+```
+
+### WRONG vs CORRECT: Context Key Design
+
+```typescript
+// WRONG — string keys collide and typos are silent
+setContext('board', state);
+const board = getContext('bord');  // Typo → returns undefined → crash later
+// If a third-party library also uses 'board' as a key, data is overwritten.
+
+// WRONG — exporting the key for consumers to use directly
+export const BOARD_KEY = Symbol('board');
+// Consumers must import the key AND know the type: getContext<BoardState>(BOARD_KEY)
+// No type safety — they could pass the wrong generic.
+
+// CORRECT — Symbol key with typed helper functions
+const BOARD_KEY = Symbol('board-context');
+
+export function setBoardContext(state: BoardState) {
+  setContext(BOARD_KEY, state);
+}
+
+export function getBoardContext(): BoardState {
+  return getContext<BoardState>(BOARD_KEY);
+  // The return type is enforced — consumers get full autocomplete
 }
 ```
 
@@ -115,6 +160,67 @@ Any descendant — no matter how deeply nested — accesses the board state with
 
 No props were threaded through `ColumnList` or `Column` to reach `TaskCard`. The board context travels directly from the layout to any descendant that asks for it.
 
+## Context Rules — When It Works and When It Does Not
+
+Context has specific rules. Violating them causes confusing bugs:
+
+### Rule 1: setContext Must Be Called During Component Initialization
+
+```svelte
+<script lang="ts">
+  // CORRECT — called during initialization (top-level script)
+  setBoardContext(board);
+
+  // WRONG — called inside an event handler (after initialization)
+  function handleClick() {
+    setBoardContext(board);  // Error or undefined behavior
+    // setContext only works during the synchronous initialization phase
+  }
+
+  // WRONG — called inside $effect (after initialization)
+  $effect(() => {
+    setBoardContext(board);  // Does not work
+  });
+</script>
+```
+
+### Rule 2: getContext Must Be Called During Component Initialization
+
+```svelte
+<script lang="ts">
+  // CORRECT — called at the top level
+  const board = getBoardContext();
+
+  // WRONG — called inside an event handler
+  function handleClick() {
+    const board = getBoardContext();  // Error: no context found
+    // getContext must be called during component initialization
+  }
+
+  // CORRECT — call getContext at the top level, use the result anywhere
+  const board = getBoardContext();
+
+  function handleClick() {
+    board.moveTask(taskId, fromId, toId, 0);  // Use the stored reference
+  }
+</script>
+```
+
+### Rule 3: Context Is Scoped to the Component Tree
+
+Context set in component A is only available to descendants of A — not siblings, not ancestors, not components in other trees:
+
+```
+Layout (setBoardContext)
+  ├── BoardPage (getBoardContext ✓ — descendant)
+  │     └── TaskCard (getBoardContext ✓ — descendant)
+  └── SettingsPage (getBoardContext ✓ — descendant)
+
+LoginPage (getBoardContext ✗ — NOT a descendant of Layout)
+```
+
+This tree-scoping is a feature. Different subtrees can have different contexts. A user viewing two boards in different tabs has two independent board contexts.
+
 ## User Permissions Context
 
 TeamBoard has role-based permissions: owner, admin, member, and viewer. Different components show or hide UI based on what the current user can do. A separate permissions context keeps this concern isolated from the board state:
@@ -148,6 +254,7 @@ function derivePermissions(role: Role): Permissions {
 export function setPermissionsContext(role: Role) {
   const permissions = derivePermissions(role);
   setContext(PERMISSIONS_KEY, permissions);
+  return permissions;
 }
 
 export function getPermissionsContext(): Permissions {
@@ -227,9 +334,39 @@ export function getThemeContext(): ThemeContext {
 }
 ```
 
+### Why Getters Are Required for Reactive Context
+
 The `get mode()` getter returns the live `$state` value each time it is read. When a component accesses `theme.mode` inside its template, Svelte establishes a reactive dependency. When `toggle()` flips the mode, every component reading `theme.mode` or `theme.colors` re-renders.
 
-Without the getter — if you passed `{ mode: mode }` directly — descendants would receive the initial value (`'light'`) and never see updates. The getter is what makes context reactive.
+```typescript
+// WRONG — passing the value directly (static, never updates)
+export function setThemeContext(initial: ThemeMode = 'light') {
+  let mode = $state<ThemeMode>(initial);
+
+  const theme = {
+    mode: mode,  // Captures the INITIAL value ('light')
+    // When mode changes to 'dark', theme.mode is still 'light'
+    toggle() { mode = mode === 'light' ? 'dark' : 'light'; }
+  };
+
+  setContext(THEME_KEY, theme);
+}
+
+// CORRECT — using getters (reactive, updates when state changes)
+export function setThemeContext(initial: ThemeMode = 'light') {
+  let mode = $state<ThemeMode>(initial);
+
+  const theme = {
+    get mode() { return mode; },  // Reads the CURRENT value every time
+    get colors() { return palettes[mode]; },  // Derived from current mode
+    toggle() { mode = mode === 'light' ? 'dark' : 'light'; }
+  };
+
+  setContext(THEME_KEY, theme);
+}
+```
+
+Without the getter — if you passed `{ mode: mode }` directly — descendants would receive the initial value (`'light'`) and never see updates. The getter is what makes context reactive. **This is the most important pattern in this lesson.**
 
 ```svelte
 <!-- src/lib/components/layout/ThemeToggle.svelte -->
@@ -239,9 +376,12 @@ Without the getter — if you passed `{ mode: mode }` directly — descendants w
   const theme = getThemeContext();
 </script>
 
-<button onclick={theme.toggle}>
+<button onclick={theme.toggle} aria-label="Toggle theme">
   {theme.mode === 'light' ? 'Switch to Dark' : 'Switch to Light'}
 </button>
+
+<!-- This text updates reactively because theme.mode is a getter -->
+<p>Current theme: {theme.mode}</p>
 ```
 
 ## Notification Context for Toast Management
@@ -388,6 +528,14 @@ The parent layout is the single place where all board-related contexts are creat
 </div>
 ```
 
+### Why Centralized Initialization Matters
+
+When all contexts are set in one file, you get three benefits:
+
+1. **Discoverability** — A new developer asks "where is the board state initialized?" The answer is always the board layout.
+2. **Ordering** — If context B depends on context A, the initialization order is explicit and visible.
+3. **Testing** — In tests, you can mount a test version of the layout with mock contexts.
+
 ## hasContext for Optional Feature Flags
 
 Some teams have access to advanced features (time tracking, custom fields, automations) and some do not. Components can adapt their UI using `hasContext` to check if a feature context has been provided:
@@ -442,7 +590,30 @@ export function getFeaturesContext(): AdvancedFeatures | null {
 </div>
 ```
 
-Without `hasContext`, calling `getContext` for a key that was never set would return `undefined`, and you would have no way to distinguish "context not provided" from "context provided with a falsy value."
+Without `hasContext`, calling `getContext` for a key that was never set would throw an error in Svelte 5. `hasContext` lets you check first, enabling components that gracefully degrade when optional contexts are missing.
+
+### Pattern: Components That Work Inside and Outside Context
+
+```svelte
+<!-- MemberActions.svelte — works with or without team context -->
+<script lang="ts">
+  import { hasContext } from 'svelte';
+  import { getPermissionsContext } from '$lib/context/permissions';
+
+  let { member } = $props();
+
+  // Safely check for context
+  const PERM_KEY = Symbol.for('permissions'); // Must match the key used in set
+  const permissions = hasContext(PERM_KEY) ? getPermissionsContext() : null;
+  const canManage = permissions?.canManageColumns ?? false;
+</script>
+
+{#if canManage}
+  <button>Change Role</button>
+{:else}
+  <span class="text-gray-400">{member.role}</span>
+{/if}
+```
 
 ## getAllContexts for Portals and Modals
 
@@ -477,11 +648,12 @@ The `TaskDetailModal` renders as a portal — it is mounted outside the normal c
 <!-- src/lib/components/ui/ContextBridge.svelte -->
 <script lang="ts">
   import { setContext } from 'svelte';
+  import type { Snippet } from 'svelte';
 
-  let { contexts, children } = $props<{
+  let { contexts, children }: {
     contexts: Map<any, any>;
-    children: any;
-  }>();
+    children: Snippet;
+  } = $props();
 
   // Re-provide every context from the original tree position
   for (const [key, value] of contexts) {
@@ -493,6 +665,15 @@ The `TaskDetailModal` renders as a portal — it is mounted outside the normal c
 ```
 
 This pattern ensures the modal has access to `getBoardContext()`, `getThemeContext()`, `getNotificationContext()`, and every other context — even though it is rendered outside the normal component hierarchy.
+
+### When You Need a Context Bridge
+
+| Scenario | Needs Bridge? | Why |
+|----------|---------------|-----|
+| Modal rendered with `{#if}` inside the tree | No | Still a descendant, inherits context |
+| Modal teleported to `<body>` via portal | Yes | Outside the component tree |
+| Tooltip rendered in a floating layer | Depends | If using a portal library, yes |
+| Component in a different route | No | It has its own layout context |
 
 ## Context vs Props vs Shared State Decision Guide
 
@@ -510,27 +691,67 @@ TeamBoard uses all three mechanisms. Here is when to use each:
 
 The decision tree:
 
-1. Is the consumer a direct child? **Props.** They are explicit and type-safe.
-2. Is the data needed by many descendants in one subtree? **Context.** It avoids prop drilling and is scoped to the subtree.
-3. Is the data needed across unrelated pages? **Shared state** in a `.svelte.ts` file. It is global and not tied to any component tree.
+```
+Is the consumer a direct child?
+  └── Yes → Props (explicit, type-safe, compile-time checked)
+
+Is the data needed by many descendants in one subtree?
+  └── Yes → Context (avoids prop drilling, scoped to the subtree)
+
+Is the data needed across unrelated pages/subtrees?
+  └── Yes → Shared state in a .svelte.ts file (global, not tree-scoped)
+
+Is the data a one-time configuration (never changes)?
+  └── Yes → Context with a plain object (no getters needed)
+
+Does the data change over time?
+  └── Yes → Context with $state-backed getters (reactive)
+```
+
+### Anti-Pattern: Using Context for Everything
+
+```typescript
+// WRONG — putting everything in context
+setContext('task', task);           // Task is a direct prop — use props
+setContext('onClose', onClose);     // Callback is a direct prop — use props
+setContext('className', 'large');   // Style variant is a direct prop — use props
+```
+
+Context is for **tree-wide** data that many descendants need. If only one child uses a value, pass it as a prop. Props are more explicit, more type-safe, and easier to understand.
+
+### Anti-Pattern: Using Shared State for Everything
+
+```typescript
+// WRONG — putting board state in a global .svelte.ts file
+// src/lib/state/global-board.svelte.ts
+export const board = createBoardState();
+
+// This is global — there is only ONE board state for the entire app.
+// If the user opens two boards in different tabs, they share state.
+// Context is better because each board layout creates its own instance.
+```
 
 ## Try It
 
 Build a mini TeamBoard context system:
 
 1. Create a `BoardContext` with a Symbol key that provides a board state object containing columns (an array) and a `moveTask` method. Write typed `setBoardContext()` and `getBoardContext()` helpers.
-2. Create a `ThemeContext` with reactive getters for `mode` (`'light'` or `'dark'`) and a `toggle()` method. Verify that child components update when the theme is toggled.
-3. Create a `NotificationContext` with `success()` and `error()` methods that push messages into a reactive array. Build a simple `ToastContainer` that renders and auto-dismisses notifications.
+2. Create a `ThemeContext` with reactive getters for `mode` (`'light'` or `'dark'`) and a `toggle()` method. Verify that child components update when the theme is toggled by checking that the UI changes in real time.
+3. Create a `NotificationContext` with `success()` and `error()` methods that push messages into a reactive array. Build a simple `ToastContainer` that renders and auto-dismisses notifications after 3 seconds.
 4. Build a parent `BoardLayout` component that calls all three `set*Context()` functions. Build child `Column` and `TaskCard` components that consume them without any prop drilling.
-5. Add a feature flag check using `hasContext` — if no features context exists, hide a "Time Tracking" section in the `TaskCard`.
+5. Add a feature flag check using `hasContext` — if no features context exists, hide a "Time Tracking" section in the `TaskCard`. Test it by rendering the card both with and without the features context.
 6. Simulate a portal: capture all contexts with `getAllContexts()`, create a `ContextBridge` component, and render a `TaskDetailModal` through it. Verify the modal can access all three contexts.
+7. Demonstrate the getter gotcha: create a version of the theme context that passes `mode` directly (without a getter) and verify that toggle does not update child components. Then fix it with a getter and verify it works.
 
 ## Key Takeaways
 
 - Use `Symbol` keys with typed helper functions (`setBoardContext` / `getBoardContext`) to prevent collisions and enforce type safety at compile time
-- Make context reactive by passing objects with `$state`-backed getters — without getters, descendants receive a static snapshot that never updates
+- Context must be set and retrieved during component initialization — not inside event handlers, effects, or timeouts
+- Make context reactive by passing objects with `$state`-backed getters — without getters, descendants receive a static snapshot that never updates. **This is the most common context bug.**
 - `hasContext` checks for optional contexts, enabling components that adapt to feature availability without crashing
 - `getAllContexts` captures the full context map for forwarding to portals and dynamically mounted components outside the normal tree
 - Set all contexts in a single parent layout to keep initialization centralized and discoverable
-- Use props for direct parent-child data, context for subtree-scoped data, and shared `.svelte.ts` state for truly global data
 - Context is tree-scoped by design — a value set in one layout branch is invisible to components in other branches, preventing accidental coupling
+- Use props for direct parent-child data (explicit, type-safe), context for subtree-scoped data (avoids drilling), and shared `.svelte.ts` state for truly global data
+- Do not use context for data that only one child needs — that is what props are for
+- Do not use shared `.svelte.ts` state for data that should be scoped to a subtree — context provides natural scoping

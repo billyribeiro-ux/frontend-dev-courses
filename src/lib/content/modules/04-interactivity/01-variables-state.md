@@ -31,6 +31,12 @@ Svelte takes the **declarative** approach — you describe *what* the UI should 
 
 You never touch the DOM directly. You just update `count`, and everything that depends on it updates automatically. This is the single most important idea in modern frontend development: **your component is a function from state to UI**. State changes, UI follows.
 
+### Why This Matters at Scale
+
+In a 10-line demo, the imperative approach feels fine. In a 10,000-line application with dozens of interconnected UI elements, it becomes untenable. Consider a dashboard with a user's name displayed in the header, a sidebar, a welcome message, and a settings panel. With imperative code, changing the user's name means updating four DOM locations manually. Miss one and the UI is inconsistent.
+
+With declarative UI, you update `user.name` once, and every location that reads it updates automatically. This eliminates an entire category of bugs — stale UI — that plagues imperative codebases.
+
 ## What Is a Variable?
 
 Before we get to reactivity, let's make sure the foundation is solid. A variable is a named container for a value. You create variables inside the `<script>` tag of your Svelte component:
@@ -48,6 +54,24 @@ Before we get to reactivity, let's make sure the foundation is solid. A variable
 ```
 
 The curly braces `{ }` in Svelte's template are **expression slots** — they evaluate whatever JavaScript expression is inside and render the result. Anything that produces a value works: `{name}`, `{age + 1}`, `{isStudent ? "Yes" : "No"}`.
+
+### Expression Slots Are Full JavaScript
+
+You can put any valid JavaScript expression in curly braces. Not just variables — function calls, math, ternaries, template literals, even array methods:
+
+```svelte
+<script>
+  let items = ["Apple", "Banana", "Cherry"];
+  let price = 9.99;
+</script>
+
+<p>{items.length} items</p>
+<p>Total: ${(price * items.length).toFixed(2)}</p>
+<p>{items.join(", ")}</p>
+<p>{new Date().toLocaleDateString()}</p>
+```
+
+But keep expressions simple. If an expression needs more than one line of logic, move it to a variable or function in the `<script>` block. Template expressions should be readable at a glance.
 
 ## let vs const
 
@@ -72,6 +96,12 @@ Use `const` for values that should never change — configuration, labels, impor
 
 A subtle but important point: `const` prevents *reassignment*, not *mutation*. A `const` object can still have its properties changed. This will matter when we talk about object state later.
 
+```js
+const user = { name: "Alex" };
+user.name = "Sam";  // This works! We changed a property, not the binding.
+// user = { name: "Sam" }; // ERROR: This reassigns the binding.
+```
+
 ## Data Types
 
 JavaScript has several types of data you will use constantly:
@@ -87,6 +117,18 @@ JavaScript has several types of data you will use constantly:
 
   // Boolean — true or false
   let isLoggedIn = false;
+
+  // null — intentional absence of a value
+  let selectedItem = null;
+
+  // undefined — value not yet assigned
+  let pendingResult;
+
+  // Array — ordered list of values
+  let tags = ["svelte", "javascript", "web"];
+
+  // Object — collection of key-value pairs
+  let user = { name: "Alex", age: 25 };
 </script>
 
 <p>{greeting}</p>
@@ -100,8 +142,12 @@ JavaScript has several types of data you will use constantly:
 | String | `"hello"`, `'world'`, `` `template` `` | Text, names, messages |
 | Number | `42`, `3.14`, `-10` | Counts, prices, measurements |
 | Boolean | `true`, `false` | On/off states, yes/no flags |
+| null | `null` | Intentional "no value" |
+| undefined | `undefined` | Value not yet set |
+| Array | `[1, 2, 3]` | Lists, collections |
+| Object | `{ key: "value" }` | Structured data |
 
-These three types — strings, numbers, and booleans — are **primitives**. They are simple, single values. Later you will also work with **objects** and **arrays**, which hold collections of values. The distinction matters for reactivity, as we will see.
+The first three — strings, numbers, and booleans — are **primitives**. They are simple, single values. Arrays and objects are **reference types** — they hold collections of values. The distinction matters enormously for reactivity, as we will see.
 
 ## Reactive State with $state()
 
@@ -139,6 +185,33 @@ This is why `$state()` is called a "rune" — it is a compile-time instruction. 
 
 The key insight: **Svelte does not re-render your entire component when state changes.** It updates only the specific DOM nodes that depend on the changed state. This is surgically precise and very fast.
 
+### WRONG vs CORRECT: Where `$state()` Works
+
+```svelte
+<script>
+  // WRONG — $state() outside of a declaration
+  const state = $state;  // Error: $state is not a value
+  someFunction($state(0));  // Error: can't pass as an argument
+
+  // WRONG — $state() with var (must use let or with a class field)
+  var count = $state(0);  // Error
+
+  // CORRECT — $state() in a let declaration
+  let count = $state(0);
+
+  // CORRECT — $state() in a class field
+  class Counter {
+    count = $state(0);
+  }
+
+  // CORRECT — $state() in a .svelte.ts module (exported)
+  // (in a .svelte.ts file)
+  // export let count = $state(0);
+</script>
+```
+
+Runes only work in `.svelte` and `.svelte.ts` / `.svelte.js` files. They are compiler directives, not runtime functions.
+
 ## When Do You Need $state()?
 
 Use `$state()` when the value will change *after* the component first renders — user interactions, timer updates, data fetching, anything dynamic. Use a plain `let` or `const` when the value is set once and never changes.
@@ -161,6 +234,26 @@ Use `$state()` when the value will change *after* the component first renders �
 ```
 
 A useful rule of thumb: if a value appears in your template *and* gets reassigned somewhere, it should be `$state()`. If it is only read, a plain `const` or `let` works fine.
+
+### The Cost of Unnecessary Reactivity
+
+Do not wrap everything in `$state()` "just in case." Each reactive variable creates tracking overhead — a signal, dependency registration, and update scheduling. For a static configuration value like `const API_URL = "/api/v1"`, using `$state()` would allocate tracking infrastructure that never fires. It is wasteful and makes your code harder to read (readers wonder "when does this change?").
+
+```svelte
+<script>
+  // WRONG — reactive state for something that never changes
+  let maxRetries = $state(3);
+  let appVersion = $state("2.1.0");
+
+  // CORRECT — plain constants for static values
+  const maxRetries = 3;
+  const appVersion = "2.1.0";
+
+  // CORRECT — reactive state for things that actually change
+  let retryCount = $state(0);
+  let isLoading = $state(false);
+</script>
+```
 
 ## Primitive vs Object State
 
@@ -194,7 +287,61 @@ A useful rule of thumb: if a value appears in your template *and* gets reassigne
 <p>{user.name} lives in {user.address.city}</p>
 ```
 
-This is powerful, but the deep proxy has a cost — every property access goes through the proxy. For large objects that you replace wholesale (like API response data you never mutate in place), `$state.raw()` gives you a non-proxied version that only reacts to reassignment:
+### The Proxy Equality Gotcha
+
+Because `$state()` wraps objects in a Proxy, the proxy is not strictly equal to the original object:
+
+```svelte
+<script>
+  const original = { name: "Alex" };
+  let user = $state(original);
+
+  // This is FALSE — user is a Proxy wrapping original
+  console.log(user === original); // false
+
+  // To compare, use $state.snapshot()
+  console.log($state.snapshot(user).name === original.name); // true
+</script>
+```
+
+This matters when you compare objects with `===` or use them as Map keys. If you need to pass reactive state to a library that checks identity, use `$state.snapshot()` first.
+
+### Array Mutations Are Tracked Automatically
+
+Deep proxying means array methods like `push`, `pop`, `splice`, `sort`, and index assignment all trigger reactive updates:
+
+```svelte
+<script>
+  let items = $state(["Apple", "Banana"]);
+
+  function addItem() {
+    items.push("Cherry");  // Triggers update — no need to reassign
+  }
+
+  function removeFirst() {
+    items.shift();  // Also triggers update
+  }
+
+  function sortItems() {
+    items.sort();  // Triggers update — in-place sort is tracked
+  }
+</script>
+
+<ul>
+  {#each items as item}
+    <li>{item}</li>
+  {/each}
+</ul>
+
+<p>{items.length} items</p>
+<button onclick={addItem}>Add Cherry</button>
+```
+
+This is different from some other frameworks where you must create a new array to trigger updates. In Svelte 5, mutate freely — the proxy handles tracking.
+
+## $state.raw() — Opting Out of Deep Proxying
+
+Deep proxying has a cost — every property access goes through the proxy. For large objects that you replace wholesale (like API response data you never mutate in place), `$state.raw()` gives you a non-proxied version that only reacts to reassignment:
 
 ```svelte
 <script>
@@ -209,7 +356,52 @@ This is powerful, but the deep proxy has a cost — every property access goes t
 </script>
 ```
 
+### When to Use `$state()` vs `$state.raw()`
+
+| Scenario | Use | Why |
+|----------|-----|-----|
+| Form inputs bound to an object | `$state()` | You mutate individual fields: `form.email = "..."` |
+| Shopping cart items | `$state()` | You push, remove, update quantities in place |
+| API response displayed in a list | `$state.raw()` | Large, replaced wholesale on fetch, never mutated |
+| Config loaded from server | `$state.raw()` | Read-only reference, replaced on reload |
+| Drag-and-drop reordering | `$state()` | You splice and mutate arrays during drag |
+| Paginated search results | `$state.raw()` | Entire page of results replaced on each search |
+
 Use `$state()` for state you mutate (form data, UI state, user input). Use `$state.raw()` for large, read-heavy data that you replace rather than mutate.
+
+### Performance Difference in Numbers
+
+If an API returns 500 task objects, each with 10 properties, `$state()` would create proxies for 5,000+ property accessors. `$state.raw()` stores the plain objects directly — faster initialization, less memory, no proxy overhead on reads. For a list of 10 items, the difference is negligible. For a list of 1,000, it matters.
+
+## $state.snapshot() — Escaping the Reactive Boundary
+
+Reactive proxies cannot be serialized directly. When you need to send state to `JSON.stringify`, `fetch`, `localStorage`, or log it to the console, use `$state.snapshot()`:
+
+```svelte
+<script>
+  let cart = $state([
+    { id: 1, name: "Widget", qty: 2 },
+    { id: 2, name: "Gadget", qty: 1 }
+  ]);
+
+  function saveToLocalStorage() {
+    // WRONG — JSON.stringify on a proxy can behave unexpectedly
+    // localStorage.setItem("cart", JSON.stringify(cart));
+
+    // CORRECT — snapshot creates a plain, deep-cloned object
+    const snapshot = $state.snapshot(cart);
+    localStorage.setItem("cart", JSON.stringify(snapshot));
+  }
+
+  function logState() {
+    // Without snapshot: console shows "Proxy {}" — unreadable
+    // With snapshot: console shows the actual data
+    console.log($state.snapshot(cart));
+  }
+</script>
+```
+
+`$state.snapshot()` performs a deep clone — mutating the snapshot does not affect the reactive state, and vice versa.
 
 ## Event Handlers — Responding to User Actions
 
@@ -227,6 +419,20 @@ State only becomes interesting when users can change it. In Svelte, event handle
 ```
 
 Notice: `onclick`, not `on:click`. Svelte 5 uses standard DOM event attribute names. These are not a framework abstraction — they map directly to the DOM events you already know: `onclick`, `oninput`, `onchange`, `onkeydown`, `onsubmit`, and so on.
+
+### WRONG vs CORRECT: Event Handler Syntax in Svelte 5
+
+```svelte
+<!-- WRONG — Svelte 4 syntax (deprecated in Svelte 5) -->
+<button on:click={increment}>+1</button>
+<input on:input={handleInput} />
+
+<!-- CORRECT — Svelte 5 standard DOM attributes -->
+<button onclick={increment}>+1</button>
+<input oninput={handleInput} />
+```
+
+The `on:` directive syntax still works but is deprecated. Always use the standard lowercase DOM attribute names.
 
 You can also extract handlers into named functions for clarity:
 
@@ -263,6 +469,46 @@ For events that carry data (like input events), the handler receives the standar
 <p>You typed: {value}</p>
 ```
 
+### Event Modifiers in Svelte 5
+
+Svelte 4 had special modifiers like `on:click|preventDefault`. In Svelte 5, use standard JavaScript in your handler:
+
+```svelte
+<script>
+  function handleSubmit(event) {
+    event.preventDefault();  // Prevent form submission
+    event.stopPropagation(); // Stop event from bubbling
+    // ... handle the form
+  }
+
+  function handleKeydown(event) {
+    if (event.key === "Enter") {
+      // Only react to Enter key
+      submitForm();
+    }
+  }
+</script>
+
+<form onsubmit={handleSubmit}>
+  <input onkeydown={handleKeydown} />
+  <button type="submit">Submit</button>
+</form>
+```
+
+This is more explicit and easier to understand than magic modifier strings. You write standard JavaScript — no framework-specific syntax to memorize.
+
+### Common Event Types
+
+| Event | Fires When | Common Use |
+|-------|-----------|------------|
+| `onclick` | Element is clicked | Buttons, links, interactive elements |
+| `oninput` | Input value changes (each keystroke) | Live search, character counters |
+| `onchange` | Input loses focus after changing | Dropdowns, checkboxes, file inputs |
+| `onsubmit` | Form is submitted | Form validation, data submission |
+| `onkeydown` | Key is pressed | Keyboard shortcuts, enter-to-submit |
+| `onfocus` / `onblur` | Element gains/loses focus | Showing help text, validation |
+| `onmouseenter` / `onmouseleave` | Mouse enters/leaves element | Tooltips, hover previews |
+
 ## Two-Way Binding with bind:value
 
 That `oninput` pattern — reading from `event.target.value` and assigning to state — is so common that Svelte provides a shortcut: `bind:value`.
@@ -281,17 +527,67 @@ That `oninput` pattern — reading from `event.target.value` and assigning to st
 
 `bind:value` creates **two-way data flow**: the input reads from `name` *and* writes back to `name` when the user types. It is syntactic sugar, not magic — it compiles down to an event handler plus a value attribute.
 
-**When to use `bind:` vs one-way + handler:**
+### When to Use `bind:` vs One-Way + Handler
 
 | Use `bind:value` when... | Use one-way + handler when... |
 |--------------------------|-------------------------------|
 | Simple form inputs | You need to validate or transform input |
 | Quick prototyping | You want to debounce input |
 | The binding is straightforward | You need to track additional event data |
+| Standard form fields | You are formatting as the user types |
 
-For most form inputs, `bind:value` is the right choice. For inputs where you need to intercept or transform the value (like formatting a phone number as the user types), use the explicit handler.
+For most form inputs, `bind:value` is the right choice. For inputs where you need to intercept or transform the value, use the explicit handler:
 
-`bind:` works with other attributes too: `bind:checked` for checkboxes, `bind:group` for radio buttons, `bind:this` to get a reference to the DOM element.
+```svelte
+<script>
+  let phone = $state("");
+
+  function handlePhoneInput(event) {
+    // Strip non-digits and format as (XXX) XXX-XXXX
+    const digits = event.target.value.replace(/\D/g, "").slice(0, 10);
+    if (digits.length >= 6) {
+      phone = `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+    } else if (digits.length >= 3) {
+      phone = `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+    } else {
+      phone = digits;
+    }
+  }
+</script>
+
+<input value={phone} oninput={handlePhoneInput} placeholder="(555) 123-4567" />
+```
+
+### Other `bind:` Targets
+
+`bind:` works with other attributes too:
+
+```svelte
+<script>
+  let checked = $state(false);
+  let selected = $state("medium");
+  let groupValue = $state("a");
+  let inputElement;
+</script>
+
+<!-- Checkboxes: bind:checked -->
+<input type="checkbox" bind:checked />
+
+<!-- Select dropdowns: bind:value -->
+<select bind:value={selected}>
+  <option value="small">Small</option>
+  <option value="medium">Medium</option>
+  <option value="large">Large</option>
+</select>
+
+<!-- Radio buttons: bind:group -->
+<label><input type="radio" bind:group={groupValue} value="a" /> Option A</label>
+<label><input type="radio" bind:group={groupValue} value="b" /> Option B</label>
+
+<!-- DOM element reference: bind:this -->
+<input bind:this={inputElement} />
+<!-- Now inputElement is the actual DOM <input> element -->
+```
 
 ## A Complete Example: Interactive Profile Form
 
@@ -314,6 +610,14 @@ Let's put everything together — `$state()`, event handlers, `bind:value`, comp
     experience < 10 ? "Senior" :
     "Staff+"
   );
+
+  function resetForm() {
+    name = "";
+    role = "developer";
+    experience = 1;
+    isRemote = false;
+    bio = "";
+  }
 </script>
 
 <div class="form-container">
@@ -322,6 +626,11 @@ Let's put everything together — `$state()`, event handlers, `bind:value`, comp
   <label>
     Name
     <input bind:value={name} placeholder="Your name" />
+    {#if name.length > 50}
+      <span class="warning">Name is too long ({name.length}/50)</span>
+    {:else}
+      <span class="counter">{name.length}/50</span>
+    {/if}
   </label>
 
   <label>
@@ -347,6 +656,8 @@ Let's put everything together — `$state()`, event handlers, `bind:value`, comp
     Bio
     <textarea bind:value={bio} rows="3" placeholder="Tell us about yourself..." />
   </label>
+
+  <button onclick={resetForm}>Reset Form</button>
 </div>
 
 {#if name}
@@ -415,6 +726,18 @@ Let's put everything together — `$state()`, event handlers, `bind:value`, comp
     font-style: italic;
     color: #6b7280;
   }
+
+  .counter {
+    font-size: 0.75rem;
+    color: #9ca3af;
+    font-weight: 400;
+  }
+
+  .warning {
+    font-size: 0.75rem;
+    color: #ef4444;
+    font-weight: 400;
+  }
 </style>
 ```
 
@@ -424,8 +747,59 @@ Study this example carefully. Notice how:
 - **`$derived`** computes `level` from `experience`. We have not covered `$derived` in depth yet (that is coming), but the idea is natural: some values are computed from other values, and those computations should also be reactive.
 - **Conditional rendering** (`{#if name}`) shows the preview only when there is data to show. The UI is always a faithful representation of the current state.
 - **`bind:value`** on every input keeps the form state in sync with zero boilerplate.
+- **Character counter** changes color when the name exceeds the limit — pure declarative logic, no imperative DOM manipulation.
 
 This is the declarative model in action. Describe the relationship between state and UI once, and the framework maintains it forever.
+
+## Debugging Reactive State
+
+When reactive state is not updating as you expect, here are the debugging strategies:
+
+### 1. Use `$inspect()` — Svelte's Built-In Debugger
+
+```svelte
+<script>
+  let count = $state(0);
+  let items = $state(["a", "b"]);
+
+  // Logs to the console whenever count or items change
+  $inspect(count);
+  $inspect(items);
+
+  // With a custom handler
+  $inspect(count).with((type, value) => {
+    if (type === "update") {
+      console.log("Count changed to:", value);
+    }
+  });
+</script>
+```
+
+`$inspect` only runs in development mode — it is stripped from production builds. It is the Svelte equivalent of putting a `console.log` on every state change, but smarter.
+
+### 2. Snapshot for Console Logging
+
+```svelte
+<script>
+  let user = $state({ name: "Alex", scores: [95, 87, 92] });
+
+  function debug() {
+    // WRONG — logs "Proxy {}" which is unreadable
+    console.log(user);
+
+    // CORRECT — logs the actual data structure
+    console.log($state.snapshot(user));
+  }
+</script>
+```
+
+### 3. Common "Why Isn't It Updating?" Checklist
+
+1. **Did you use `$state()`?** A plain `let` without `$state()` will not trigger UI updates.
+2. **Are you mutating `$state.raw()`?** Raw state only reacts to reassignment, not mutation.
+3. **Are you reassigning or mutating?** For primitives, you must reassign. For `$state()` objects, both work.
+4. **Is the update happening in a callback?** Ensure the callback is modifying the same `$state` variable the template reads.
+5. **Are you comparing proxies with `===`?** Proxied objects are never `===` to the original.
 
 ## The Mental Model, Summarized
 
@@ -444,6 +818,12 @@ Events → State changes → UI updates (automatically)
 
 This cycle — event, state change, UI update, user interaction — is the heartbeat of every interactive Svelte application. Every feature you build is some variation of this loop.
 
+### State Boundaries — Where State Lives Matters
+
+A principle that becomes critical as applications grow: **state should live at the lowest common ancestor of all components that need it.**
+
+If only one component uses a counter, declare `$state(0)` in that component. If two sibling components need the same counter, lift it to their parent. If the entire app needs it, put it in a `.svelte.ts` module or use context. Placing state too high makes components unnecessarily coupled. Placing state too low forces you to duplicate it or pass it around awkwardly.
+
 ## Try It
 
 Build an "Event RSVP" component:
@@ -453,15 +833,23 @@ Build an "Event RSVP" component:
 3. Show a live preview card below the form that summarizes the RSVP. Use conditional rendering: only show the dietary line if the preference is not "none", only show the parking note if checked.
 4. Add a "Reset" button that sets all state back to default values using an `onclick` handler.
 5. Style the form and preview card with scoped CSS.
+6. Add a character counter below the name input showing `{name.length}/50` and change its color to red when the name exceeds 50 characters using a conditional class (`class:warning`).
+7. Add a `$inspect(name)` call and observe it in the browser console as you type.
+8. Add a "Save to Console" button that logs `$state.snapshot()` of all form data as a plain object.
 
-Stretch goal: add a character counter below the name input showing `{name.length}/50` and change its color to red when the name exceeds 50 characters.
+Stretch goal: Add an array of additional guest names using `$state([])`. Include an "Add Guest" button that pushes to the array and a list that renders each guest with a "Remove" button that splices them out. Verify that the UI updates for both `push` and `splice` without reassignment.
 
 ## Key Takeaways
 
 - **Declarative UI** means you describe what the UI looks like for a given state — the framework handles DOM updates
 - **`$state()`** is a compile-time rune that creates a reactive signal — Svelte tracks reads and writes to update only the affected DOM nodes
+- Runes only work in `.svelte` and `.svelte.ts` / `.svelte.js` files — they are compiler directives, not runtime functions
 - **Primitive state** (strings, numbers, booleans) reacts to reassignment; **object state** is deep-proxied so nested mutations are also tracked
+- Array methods like `push`, `splice`, and `sort` trigger updates automatically with `$state()` — no need to create new arrays
 - **`$state.raw()`** opts out of deep proxying — use it for large, read-only data you replace wholesale
-- **Event handlers** (`onclick`, `oninput`) are standard DOM events, not framework abstractions
-- **`bind:value`** is syntactic sugar for two-way data flow — use it for simple form inputs
-- **Your component is a function from state to UI.** State changes, UI follows. This is the mental model that makes everything else make sense.
+- **`$state.snapshot()`** converts reactive proxies to plain objects for serialization, logging, and identity comparison
+- **`$inspect()`** logs state changes during development and is stripped from production builds
+- **Event handlers** (`onclick`, `oninput`) are standard DOM events, not framework abstractions — use `event.preventDefault()` instead of modifiers
+- **`bind:value`** is syntactic sugar for two-way data flow — use it for simple form inputs, use explicit handlers for transformation and validation
+- **Your component is a function from state to UI.** State changes, UI follows. This is the mental model that makes everything else make sense
+- State should live at the **lowest common ancestor** of all components that need it — not higher, not lower

@@ -4,6 +4,20 @@ TeamBoard is not only a dynamic app — it also has a marketing landing page, a 
 
 This lesson also covers the advanced routing features that support TeamBoard's URL structure: rest parameters for catch-all help pages, route matchers for validating team slugs, and optional parameters for locale-aware URLs. Together with prerendering, these patterns complete the routing layer you sketched in Module 44.
 
+## The Mental Model: Build-Time vs Run-Time Data
+
+Every piece of data in your application has a "freshness requirement." The question to ask is: **how often does this data change relative to deployments?**
+
+```
+Data Changes...               Use...
+Never (after deploy)    →     prerender() with static inputs
+Rarely (weekly/monthly) →     prerender() with dynamic: true
+Per request (user-specific) → query() or load function
+Per second (real-time)  →     WebSocket / Server-Sent Events
+```
+
+Marketing copy, help articles, and pricing pages change when a PM updates them — not when a user loads the page. These are deployment-time data. By running the data fetch once during `npm run build` instead of on every request, you eliminate server costs, reduce latency to zero (static file from CDN), and improve SEO (the HTML is already complete).
+
 ## Prerendering the Marketing Landing Page
 
 TeamBoard's root page at `/` is a marketing landing page. It shows the app name, feature highlights, and a call-to-action. None of this content depends on user state. Use `prerender()` to fetch the content at build time:
@@ -92,6 +106,26 @@ For the marketing page, you also want to set the `prerender` page option so Svel
 export const prerender = true;
 ```
 
+### WRONG vs CORRECT: When to Set prerender = true
+
+```typescript
+// WRONG — prerendering a page that depends on the logged-in user
+// src/routes/dashboard/+page.ts
+export const prerender = true;
+// The dashboard shows different content for each user.
+// A prerendered page is the same for everyone — user-specific data is missing.
+
+// WRONG — prerendering a page with dynamic form actions
+// src/routes/contact/+page.ts
+export const prerender = true;
+// Form actions require a server. Prerendered pages have no server at runtime.
+
+// CORRECT — prerendering a page with static content
+// src/routes/pricing/+page.ts
+export const prerender = true;
+// Pricing is the same for every visitor. No user-specific data.
+```
+
 The page option `export const prerender = true` tells SvelteKit to render the entire route to static HTML at build time. The `prerender()` function bakes specific data into the build. Together, the page is fully static — no server at runtime. Use this on any page where the content does not change per request:
 
 ```typescript
@@ -165,7 +199,26 @@ export const getHelpIndex = prerender(async () => {
 });
 ```
 
-At build time, SvelteKit calls `getHelpArticle` five times — once per slug in `inputs`. All results are cached. `getHelpIndex` runs once and returns the article list. The help index page:
+At build time, SvelteKit calls `getHelpArticle` five times — once per slug in `inputs`. All results are cached. `getHelpIndex` runs once and returns the article list.
+
+### How inputs Works Under the Hood
+
+```
+Build time:
+  getHelpArticle({ slug: 'getting-started' }) → result cached
+  getHelpArticle({ slug: 'creating-boards' }) → result cached
+  getHelpArticle({ slug: 'keyboard-shortcuts' }) → result cached
+  getHelpArticle({ slug: 'team-roles' }) → result cached
+  getHelpArticle({ slug: 'integrations' }) → result cached
+
+Runtime:
+  Request for /help/getting-started → serve cached result (no server call)
+  Request for /help/unknown-slug → ???
+```
+
+Without `dynamic: true`, a request for a slug not in `inputs` fails. With `dynamic: true`, it falls back to a live server call.
+
+The help index page:
 
 ```svelte
 <!-- src/routes/(app)/help/+page.svelte -->
@@ -233,6 +286,22 @@ export const getHelpArticle = prerender(
 
 Known articles are served from the build cache. A request for `/help/new-feature-guide` triggers a live server call. The result is cached via the Cache API and cleared on the next deployment.
 
+### The Cache Lifecycle with dynamic: true
+
+```
+Deploy v1:
+  Build: prerender 5 known articles → cached
+  Runtime: /help/getting-started → from build cache (instant)
+  Runtime: /help/new-article → live server call → runtime cache
+
+Deploy v2:
+  Build: prerender 5 known articles (possibly including new-article) → cached
+  Runtime cache from v1 is cleared
+  Everything starts fresh from the new build
+```
+
+This means `dynamic: true` articles have slightly higher latency on first request (live server call) but are instant on subsequent requests until the next deploy. If you know a new article will be popular, add it to `inputs` for the next build.
+
 ## Rest Parameters: Catch-All Help Routes
 
 TeamBoard's help center supports nested paths like `/help/getting-started`, `/help/teams/roles`, and `/help/advanced/integrations/webhooks`. A rest parameter captures all segments after `/help/`:
@@ -250,15 +319,41 @@ The `[...slug]` parameter matches any number of path segments:
 | `/help/teams/roles` | `'teams/roles'` |
 | `/help/advanced/integrations/webhooks` | `'advanced/integrations/webhooks'` |
 
+### WRONG vs CORRECT: Handling Rest Parameters
+
+```typescript
+// WRONG — assuming slug is a single segment
+export const load: PageLoad = async ({ params }) => {
+  const article = await getArticle(params.slug);
+  // params.slug is 'teams/roles' — not just 'roles'
+  // Your lookup may fail if it expects a single word
+};
+
+// CORRECT — handle the full path, including nested segments
+export const load: PageLoad = async ({ params }) => {
+  // Split for breadcrumb generation
+  const segments = params.slug.split('/');
+  const article = await getArticle(params.slug);
+
+  return {
+    article,
+    breadcrumbs: segments.map((seg, i) => ({
+      label: seg.replace(/-/g, ' '),
+      href: `/help/${segments.slice(0, i + 1).join('/')}`
+    }))
+  };
+};
+```
+
 Build the help article page:
 
 ```svelte
 <!-- src/routes/(app)/help/[...slug]/+page.svelte -->
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { getHelpArticle } from '$lib/api/help.remote';
 
-  const article = getHelpArticle({ slug: $page.params.slug });
+  const article = getHelpArticle({ slug: page.params.slug });
 </script>
 
 {#await article}
@@ -326,32 +421,21 @@ src/routes/(app)/[teamSlug=teamSlug]/
     +page.svelte
 ```
 
-Now `/ACME-Corp/boards` (uppercase) or `/a/boards` (too short) return a 404 without reaching any load function. The layout resolves the slug to a team:
+Now `/ACME-Corp/boards` (uppercase) or `/a/boards` (too short) return a 404 without reaching any load function.
+
+### Why Route Matchers Matter for Security and Performance
+
+Without a matcher, every URL segment hits your load function, which queries the database. A bot scanning `/admin/boards`, `/wp-admin/boards`, `/../../etc/passwd/boards` triggers database queries for nonsensical slugs. A matcher rejects these at the routing layer — no load function runs, no database query fires.
 
 ```typescript
-// src/routes/(app)/[teamSlug=teamSlug]/+layout.server.ts
-import { error } from '@sveltejs/kit';
-import type { LayoutServerLoad } from './$types';
-import { db } from '$lib/server/database';
-import { teams } from '$lib/server/schema';
-import { eq } from 'drizzle-orm';
+// Without matcher: /🎉/boards hits the database
+// slug '🎉' passes to the load function, queries the DB, returns 404
 
-export const load: LayoutServerLoad = async ({ params }) => {
-  const [team] = await db
-    .select()
-    .from(teams)
-    .where(eq(teams.slug, params.teamSlug))
-    .limit(1);
-
-  if (!team) {
-    error(404, 'Team not found');
-  }
-
-  return { team };
-};
+// With matcher: /🎉/boards is rejected immediately
+// match('🎉') returns false, SvelteKit returns 404 without running any load
 ```
 
-The matcher prevents invalid slugs from reaching the database. You can create matchers for other parameters too:
+You can create matchers for other parameters too:
 
 ```typescript
 // src/params/boardId.ts
@@ -409,17 +493,36 @@ src/routes/[[lang=lang]]/help/[...slug]/
   +page.svelte
 ```
 
-Now `/en/help/getting-started` matches but `/xyz/help/getting-started` does not. Use the optional parameter to determine the display language:
+Now `/en/help/getting-started` matches but `/xyz/help/getting-started` does not.
+
+### WRONG vs CORRECT: Optional Parameter Ambiguity
+
+```
+WRONG — optional parameter before a non-optional segment with the same name
+src/routes/[[lang]]/[[category]]/+page.svelte
+  /en → params.lang = 'en', params.category = undefined
+  /news → params.lang = 'news', params.category = undefined
+  // Is "news" a language or a category? SvelteKit cannot tell.
+
+CORRECT — use matchers to disambiguate
+src/routes/[[lang=lang]]/[[category=category]]/+page.svelte
+  /en → lang matcher matches 'en', category = undefined
+  /news → lang matcher rejects 'news', falls through to category
+```
+
+When optional parameters are ambiguous, matchers resolve the ambiguity by testing each parameter against its validation function.
+
+Use the optional parameter to determine the display language:
 
 ```svelte
 <!-- src/routes/[[lang=lang]]/help/[...slug]/+page.svelte -->
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { getHelpArticle } from '$lib/api/help.remote';
 
   // Default to 'en' if no locale in URL
-  const locale = $page.params.lang ?? 'en';
-  const article = getHelpArticle({ slug: $page.params.slug });
+  const locale = page.params.lang ?? 'en';
+  const article = getHelpArticle({ slug: page.params.slug });
 </script>
 
 {#await article then content}
@@ -432,8 +535,6 @@ Now `/en/help/getting-started` matches but `/xyz/help/getting-started` does not.
 {/await}
 ```
 
-This ties back to the `reroute` hook from Module 44: the hook normalizes URLs, the optional parameter captures the locale.
-
 ## Decision Guide: prerender() vs query() vs Load Functions
 
 | Approach | When to Use | Example |
@@ -445,6 +546,17 @@ This ties back to the `reroute` hook from Module 44: the hook normalizes URLs, t
 | `+page.ts` load (universal) | Data fetched on both server and client | Data from public APIs that do not need secrets |
 
 The key question is: **when does this data change?** Never — `prerender()`. Rarely — `prerender()` with `dynamic: true`. Per request — `query()`. Per route — `+page.server.ts`. You can combine them: TeamBoard uses `+layout.server.ts` for auth guards, `query()` for boards and tasks, and `prerender()` for marketing content.
+
+### The Cost Comparison
+
+| Approach | Build Time Cost | Runtime Cost | CDN-Friendly |
+|----------|----------------|-------------|--------------|
+| `prerender()` | One fetch per input | Zero | Yes — static file |
+| `prerender()` + `dynamic: true` | One per known input | One fetch per unknown input | Partially |
+| `query()` | None | One fetch per request | Depends on caching |
+| `+page.server.ts` | None | One DB query per request | No |
+
+For marketing pages with millions of visitors, `prerender()` saves millions of server calls. For a board page with 10 daily users, the cost difference is negligible.
 
 ## Putting It All Together: TeamBoard's Route Map
 
@@ -501,22 +613,26 @@ Each route uses the data loading strategy that fits its content:
 
 Build the prerendering and routing layer for TeamBoard:
 
-1. Create a `prerender()` function for help articles with `inputs` for at least three known slugs and `dynamic: true` for new content
-2. Create a `src/params/teamSlug.ts` route matcher that validates slugs (lowercase, hyphens, 3-40 characters)
-3. Set up the catch-all help route at `src/routes/(app)/help/[...slug]/+page.svelte` using the rest parameter
-4. Add `export const prerender = true` to the marketing landing page
-5. Create an optional `[[lang=lang]]` parameter for the help section with a `lang.ts` matcher
-6. Verify that `/help/getting-started` loads from the build cache, `/help/new-article` falls back to a server call, and `/INVALID-TEAM/boards` returns a 404
+1. Create a `prerender()` function for help articles with `inputs` for at least three known slugs and `dynamic: true` for new content. Add a `getHelpIndex()` function that returns all article summaries.
+2. Create a `src/params/teamSlug.ts` route matcher that validates slugs (lowercase, hyphens, 3-40 characters). Test it by navigating to `/INVALID/boards` and verifying a 404.
+3. Create a `src/params/boardId.ts` route matcher that validates positive integers. Test with `/acme/boards/abc` (404) and `/acme/boards/42` (match).
+4. Set up the catch-all help route at `src/routes/(app)/help/[...slug]/+page.svelte` using the rest parameter. Build a breadcrumb component that splits `params.slug` into segments.
+5. Add `export const prerender = true` to the marketing landing page and pricing page. Run `npm run build` and verify the output contains static HTML files.
+6. Create an optional `[[lang=lang]]` parameter for the help section with a `lang.ts` matcher. Test that `/en/help/getting-started`, `/help/getting-started`, and `/fr/help/getting-started` all resolve correctly.
+7. Verify that `/help/getting-started` loads from the build cache (check network tab — no API request), `/help/new-article` falls back to a server call (if `dynamic: true`), and `/INVALID-TEAM/boards` returns a 404 immediately (no database query).
+8. Create a sitemap of all prerendered pages by reading the `inputs` array and generating URLs.
 
 ## Key Takeaways
 
 - `prerender()` executes at build time and serves cached results with zero runtime cost — ideal for marketing pages and help content
 - Use `inputs` to prerender multiple argument combinations (one per help article, one per known slug)
-- `dynamic: true` falls back to a live server call for values not in the prerendered set, then caches the result
+- `dynamic: true` falls back to a live server call for values not in the prerendered set, then caches the result until the next deployment
 - `export const prerender = true` makes an entire route fully static — combine with `prerender()` for maximum performance
 - Rest parameters `[...slug]` capture any number of path segments — perfect for catch-all documentation and help routes
-- Route matchers (`src/params/teamSlug.ts`) validate URL parameters before they reach load functions, preventing invalid data from hitting your database
+- Route matchers (`src/params/teamSlug.ts`) validate URL parameters before they reach load functions, preventing invalid data from hitting your database and blocking bot scanning
 - Optional parameters `[[lang]]` let a route segment be present or absent — useful for locale prefixes
-- Combine optional parameters with route matchers (`[[lang=lang]]`) to restrict valid values
+- Combine optional parameters with route matchers (`[[lang=lang]]`) to restrict valid values and resolve ambiguity
+- Use `$app/state` (not `$app/stores`) for accessing `page.params` in components
 - Choose `prerender()` for build-time data, `query()` for runtime data, and `+page.server.ts` for route-level setup
 - The `reroute` hook and optional parameters work together: the hook normalizes URLs, the parameter captures the value
+- Route matchers prevent unnecessary database queries from bot traffic and invalid URLs — a security and performance win

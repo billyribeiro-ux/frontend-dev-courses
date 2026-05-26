@@ -651,26 +651,19 @@ The key technique: `element.style.setProperty` sets inline styles that override 
 
 ## Tailwind Dark Mode Integration
 
-If you use Tailwind CSS with SvelteKit, configure it to use the class-based dark mode strategy (which aligns with the `.dark` class approach we have been building):
+If you use Tailwind CSS v4 with SvelteKit, dark mode works via the `dark` variant, which Tailwind applies when it detects a `.dark` class on an ancestor element. Define custom theme tokens in your CSS that map to your design token custom properties:
 
-```javascript
-// tailwind.config.js
-export default {
-  darkMode: 'class', // Uses .dark class on <html>, not media query
-  content: ['./src/**/*.{html,svelte,js,ts}'],
-  theme: {
-    extend: {
-      colors: {
-        // Map to your CSS custom properties so Tailwind and tokens share values
-        primary: 'var(--color-primary)',
-        surface: 'var(--color-surface)',
-        'text-primary': 'var(--color-text)',
-        'text-secondary': 'var(--color-text-secondary)',
-        border: 'var(--color-border)'
-      }
-    }
-  }
-};
+```css
+/* src/app.css */
+@import "tailwindcss";
+
+@theme {
+  --color-primary: var(--color-primary);
+  --color-surface: var(--color-surface);
+  --color-text-primary: var(--color-text);
+  --color-text-secondary: var(--color-text-secondary);
+  --color-border: var(--color-border);
+}
 ```
 
 Now you can use Tailwind utility classes that reference your design tokens:

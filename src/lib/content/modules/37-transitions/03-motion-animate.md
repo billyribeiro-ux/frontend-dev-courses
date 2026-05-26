@@ -2,38 +2,24 @@
 
 Transitions handle elements entering and leaving the DOM. But what about elements that **move** — a list item sliding to a new position after sorting, a progress bar smoothly filling, or a draggable element springing back to its origin? Svelte provides three tools for this: the `animate:flip` directive for list reordering, `Tween` for smooth value interpolation, and `Spring` for physics-based motion.
 
-These tools combine with transitions to create interfaces where everything moves fluidly. Items entering a list fade in, items leaving fade out, and the remaining items smoothly slide to fill the gap. This lesson covers each tool in depth — including the internal mechanics, performance characteristics, and advanced patterns — and shows how to combine them for polished, production-quality animations.
+These tools combine with transitions to create interfaces where everything moves fluidly. Items entering a list fade in, items leaving fade out, and the remaining items smoothly slide to fill the gap. This lesson covers each tool in depth — the mental models behind them, their performance characteristics, common pitfalls, and how to combine them for polished, production-quality animations.
+
+The key architectural distinction: transitions control **presence** (is this element in the DOM?), while motion and animate control **values** (what number, position, or color should this element have right now?). Understanding this separation helps you pick the right tool for each animation task.
 
 ## animate:flip — Smooth List Reordering
 
-When items in a keyed `{#each}` block change position, they normally jump instantly to their new location. The `animate:flip` directive measures each element's old and new position and smoothly animates between them.
+When items in a keyed `{#each}` block change position, they normally jump instantly to their new location. The `animate:flip` directive (First, Last, Invert, Play) measures each element's old and new position and smoothly animates between them.
 
-### The FLIP Technique Deep Dive
+### The FLIP Algorithm Explained
 
-FLIP stands for **First, Last, Invert, Play** — a performance pattern for layout animations:
+The name comes from a four-step technique invented by Paul Lewis at Google:
 
 1. **First**: Before the DOM change, Svelte records each element's position using `getBoundingClientRect()`. It captures `top`, `left`, `width`, and `height`.
 2. **Last**: The DOM change is applied (items are reordered). Svelte records each element's new position.
 3. **Invert**: For each element, Svelte calculates the delta between old and new positions: `deltaX = first.left - last.left`, `deltaY = first.top - last.top`. It applies a CSS `transform: translate(deltaX, deltaY)` — the element is now visually in its old position, even though its DOM position has changed.
 4. **Play**: Svelte removes the transform with a CSS transition, so the element smoothly animates from its old visual position to its new DOM position.
 
-Why is this performant? Because `transform` is a compositor-only property. The browser does not need to recalculate layout or repaint — it just moves pixels on the GPU. The actual DOM reorder happens instantly in step 2, which is a single layout calculation. The animation in step 4 is free from layout thrashing.
-
-The key requirement is the `(key)` expression in `{#each}`. Without it, Svelte cannot track which DOM element moved where. It would have to destroy and recreate elements instead of animating them:
-
-```svelte
-<!-- WRONG — no key, items are destroyed and recreated -->
-{#each items as item}
-  <li animate:flip>{item.name}</li>
-{/each}
-
-<!-- CORRECT — key enables identity tracking -->
-{#each items as item (item.id)}
-  <li animate:flip>{item.name}</li>
-{/each}
-```
-
-### Basic Usage
+This is why FLIP animations are performant — they use CSS `transform` for the animation, which runs on the compositor thread and does not trigger layout recalculations. The actual DOM reorder happens instantly in step 2, which is a single layout calculation. The animation in step 4 is free from layout thrashing.
 
 ```svelte
 <script>
@@ -115,37 +101,137 @@ The key requirement is the `(key)` expression in `{#each}`. Without it, Svelte c
 </style>
 ```
 
+The key `(item.id)` is required — Svelte uses it to track which element moved where. Without a key, Svelte cannot distinguish between items, and `animate:flip` will not work.
+
 ### animate:flip Parameters
 
-The `flip` function accepts three parameters:
+The `flip` function accepts several configuration options:
 
-| Parameter | Type | Default | Purpose |
-|-----------|------|---------|---------|
-| `delay` | `number` | `0` | Milliseconds before animation starts |
-| `duration` | `number \| function` | `(d) => Math.sqrt(d) * 120` | Duration in ms, or function of pixel distance |
-| `easing` | `function` | `cubicOut` | Easing function from `svelte/easing` |
+| Parameter | Type | Default | Effect |
+|-----------|------|---------|--------|
+| `duration` | `number \| ((len: number) => number)` | `(d) => Math.sqrt(d) * 120` | Animation duration in ms |
+| `delay` | `number` | `0` | Delay before animation starts |
+| `easing` | `(t: number) => number` | `cubicOut` | Easing function |
 
-The default `duration` function is `(d) => Math.sqrt(d) * 120`, where `d` is the pixel distance the element moves. This means short movements are quick and long movements take proportionally less additional time — which matches how physical objects move. You can override with a fixed number or your own function:
+The default `duration` is a function of the distance traveled — items that move farther take longer, which feels natural. You can override with a fixed number or your own distance function:
 
 ```svelte
-<!-- Fixed duration — all items move at the same speed regardless of distance -->
+<!-- Fixed duration: all items animate in the same time -->
 <li animate:flip={{ duration: 300 }}>
 
-<!-- Distance-based duration — longer distances take longer -->
+<!-- Distance-proportional: longer distance = longer animation -->
 <li animate:flip={{ duration: (d) => d * 2 }}>
 
-<!-- Custom easing for a bouncy feel -->
-<li animate:flip={{ duration: 400, easing: elasticOut }}>
+<!-- With easing: control the acceleration curve -->
+<li animate:flip={{ duration: 400, easing: quintOut }}>
+```
+
+### Common animate:flip Mistakes
+
+The most frequent `animate:flip` bugs stem from key expression problems:
+
+```svelte
+<!-- WRONG: No key expression — flip cannot track elements -->
+{#each items as item}
+  <li animate:flip={{ duration: 300 }}>{item.name}</li>
+{/each}
+
+<!-- WRONG: Using index as key — items swap identities instead of moving -->
+{#each items as item, i (i)}
+  <li animate:flip={{ duration: 300 }}>{item.name}</li>
+{/each}
+
+<!-- CORRECT: Stable unique key from the data -->
+{#each items as item (item.id)}
+  <li animate:flip={{ duration: 300 }}>{item.name}</li>
+{/each}
+```
+
+The index-as-key mistake is subtle and worth understanding deeply. When you sort a list and use `(i)` as the key, Svelte sees key `0` still at position 0, key `1` still at position 1, etc. — no elements "moved," so FLIP does nothing. Instead, Svelte updates the *content* of each element in place. The visual result is that text changes instantly without animation. This is one of the most common animation bugs in Svelte applications.
+
+Another common mistake is mutating the array in place instead of creating a new reference:
+
+```svelte
+<!-- WRONG: Mutating in place can cause unpredictable FLIP behavior -->
+<script>
+  function sortByPriority() {
+    items.sort((a, b) => a.priority - b.priority);
+    // The FLIP algorithm may not correctly measure positions because
+    // the mutation and the DOM update can interleave
+  }
+</script>
+
+<!-- CORRECT: Create a new array reference -->
+<script>
+  function sortByPriority() {
+    items = [...items].sort((a, b) => a.priority - b.priority);
+  }
+</script>
 ```
 
 ### When animate:flip Does NOT Work
 
 The `animate:flip` directive has specific requirements:
 
-1. It must be on a **direct child** of a keyed `{#each}` block.
-2. The `{#each}` block must have a key expression: `{#each items as item (item.id)}`.
-3. The element must already exist in the list — `animate:flip` does not handle elements entering or leaving. For those, use `in:` and `out:` transitions.
-4. It only animates position changes. If an element's size changes (e.g., its text gets longer), FLIP handles that too, but the visual result may look odd if the size change is dramatic.
+1. It must be on a **direct child** of a keyed `{#each}` block
+2. The `{#each}` block must have a key expression: `{#each items as item (item.id)}`
+3. The element must already exist in the list — `animate:flip` does not handle elements entering or leaving; for those, use `in:` and `out:` transitions
+4. It only animates position changes. If an element's size changes dramatically (e.g., its text gets much longer), FLIP handles the size difference but the visual result may look odd
+
+### Grid Layouts with animate:flip
+
+FLIP works with any layout — not just vertical lists. Here is a grid where items animate both horizontally and vertically:
+
+```svelte
+<script>
+  import { flip } from "svelte/animate";
+
+  let items = $state(
+    Array.from({ length: 12 }, (_, i) => ({
+      id: i + 1,
+      label: `Item ${i + 1}`,
+      color: `hsl(${i * 30}, 70%, 60%)`
+    }))
+  );
+
+  function shuffle() {
+    items = [...items].sort(() => Math.random() - 0.5);
+  }
+</script>
+
+<button onclick={shuffle}>Shuffle Grid</button>
+
+<div class="grid">
+  {#each items as item (item.id)}
+    <div
+      animate:flip={{ duration: 400 }}
+      class="card"
+      style="background: {item.color}"
+    >
+      {item.label}
+    </div>
+  {/each}
+</div>
+
+<style>
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    max-width: 500px;
+  }
+
+  .card {
+    padding: 20px;
+    border-radius: 8px;
+    color: white;
+    font-weight: bold;
+    text-align: center;
+  }
+</style>
+```
+
+Each card smoothly slides to its new grid position. FLIP calculates the 2D offset (both X and Y) and animates the transform accordingly. This is why FLIP-based animations are popular for masonry layouts, image galleries, and Kanban boards.
 
 ## Tween — Smooth Value Interpolation
 
@@ -188,7 +274,7 @@ The `animate:flip` directive has specific requirements:
     height: 100%;
     background: #3b82f6;
     border-radius: 12px;
-    transition: none;
+    transition: none; /* Let Tween handle animation, not CSS */
   }
 
   .controls {
@@ -209,20 +295,59 @@ The `animate:flip` directive has specific requirements:
 
 Access the current interpolated value with `progress.current`. When you call `progress.set(75)`, the value smoothly interpolates from its current position to 75 over 600ms.
 
+### Why Tween Instead of CSS Transitions?
+
+CSS transitions handle many animation needs well, but `Tween` gives you something CSS cannot: a reactive JavaScript value that updates every frame. This matters when:
+
+1. **You need the intermediate value in your template**: Displaying a counter that counts up from 0 to 1000, or formatting a currency value as it animates
+2. **You need to derive other values**: A progress bar where the color changes based on the current percentage
+3. **You are animating non-CSS properties**: SVG path data, canvas drawing coordinates, chart data points
+4. **You need to interrupt and redirect**: Calling `.set()` mid-animation smoothly redirects to the new target without a jump
+
+```svelte
+<script>
+  import { Tween } from "svelte/motion";
+  import { cubicOut } from "svelte/easing";
+
+  const value = new Tween(0, { duration: 2000, easing: cubicOut });
+
+  // The color transitions from red to green as the value goes from 0 to 100
+  let barColor = $derived(
+    `hsl(${(value.current / 100) * 120}, 70%, 50%)`
+  );
+
+  // Format as currency — impossible with CSS transitions alone
+  let displayValue = $derived(
+    new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD'
+    }).format(value.current * 100)
+  );
+</script>
+
+<div class="bar-bg">
+  <div class="bar-fill" style="width: {value.current}%; background: {barColor}"></div>
+</div>
+<p class="text-2xl font-mono">{displayValue}</p>
+
+<button onclick={() => value.set(100)}>Animate to $10,000</button>
+<button onclick={() => value.set(0)}>Reset</button>
+```
+
 ### How Tween Works Internally
 
-When you call `tween.set(newValue)`, here is what happens inside:
+When you call `tween.set(newValue)`, here is what happens:
 
-1. Svelte records the current value as `startValue` and `newValue` as `endValue`.
-2. It captures `Date.now()` as `startTime`.
-3. It registers a `requestAnimationFrame` loop.
-4. On each frame, it calculates `elapsed = Date.now() - startTime` and `t = elapsed / duration`.
-5. It applies the easing function: `easedT = easing(Math.min(t, 1))`.
-6. It interpolates: `currentValue = startValue + (endValue - startValue) * easedT`.
-7. It updates `this.current`, which is a reactive signal that triggers re-renders.
-8. When `t >= 1`, the loop stops and the value is set exactly to `endValue`.
+1. Svelte records the current value as `startValue` and `newValue` as `endValue`
+2. It captures `Date.now()` as `startTime`
+3. It registers a `requestAnimationFrame` loop
+4. On each frame, it calculates `elapsed = Date.now() - startTime` and `t = elapsed / duration`
+5. It applies the easing function: `easedT = easing(Math.min(t, 1))`
+6. It interpolates: `currentValue = startValue + (endValue - startValue) * easedT`
+7. It updates `this.current`, which is a reactive signal that triggers re-renders
+8. When `t >= 1`, the loop stops and the value is set exactly to `endValue`
 
-If you call `tween.set()` again while an animation is in progress, the current animation is cancelled. The new animation starts from wherever the value currently is. This is why rapid clicking on the progress bar buttons above produces smooth, natural motion — each new click interrupts the current animation and starts a new one from the current position.
+If you call `tween.set()` again while an animation is in progress, the current animation is cancelled. The new animation starts from wherever the value currently is. This is why rapid clicking on the progress bar buttons produces smooth, natural motion — each new click interrupts the current animation and starts a new one from the current position.
 
 ### The .set() Method Returns a Promise
 
@@ -235,140 +360,122 @@ const position = new Tween(0, { duration: 400 });
 await position.set(50);
 await position.set(100);
 await position.set(0);
-
-// The promise rejects (resolves with false) if interrupted
-const completed = await position.set(100);
-if (!completed) {
-  console.log("Animation was interrupted");
-}
 ```
 
-### Custom Interpolation for Complex Values
+### Tween Configuration Deep Dive
 
-`Tween` accepts `duration`, `easing`, and an `interpolate` function for complex types. By default, Tween performs linear interpolation on numbers: `start + (end - start) * t`. For non-numeric values, you need a custom interpolator:
+`Tween` accepts three options:
+
+| Option | Type | Default | Effect |
+|--------|------|---------|--------|
+| `duration` | `number` | `400` | How long the animation lasts in milliseconds |
+| `easing` | `(t: number) => number` | `linear` | The acceleration curve — import from `svelte/easing` |
+| `interpolate` | `(from: T, to: T) => (t: number) => T` | Linear interpolation | How to compute intermediate values |
+
+The `easing` parameter deserves attention. Svelte ships with many easing functions in `svelte/easing`:
+
+```typescript
+import {
+  linear,        // Constant speed (default)
+  cubicOut,      // Fast start, slow end — feels natural for most UI
+  cubicInOut,    // Slow start, slow end — good for emphasis
+  elasticOut,    // Overshoots and bounces — playful
+  bounceOut,     // Bounces at the end — like a ball dropping
+  quintOut,      // Similar to cubicOut but more dramatic
+  expoOut        // Exponential deceleration — very quick start
+} from "svelte/easing";
+```
+
+A common mistake is using `linear` (the default) for UI animations. Linear motion looks robotic because nothing in the physical world moves at constant speed. Always specify an easing function for user-facing animations:
+
+```typescript
+// WRONG: Linear easing looks mechanical
+const progress = new Tween(0, { duration: 600 });
+
+// CORRECT: cubicOut feels natural — fast start, gentle stop
+const progress = new Tween(0, { duration: 600, easing: cubicOut });
+```
+
+### Custom Interpolation for Complex Types
+
+The `interpolate` option lets you tween between non-numeric values. This is how you animate colors, coordinates, or any custom type:
 
 ```typescript
 import { Tween } from "svelte/motion";
 import { cubicInOut } from "svelte/easing";
 
-// Tween a number
-const count = new Tween(0, { duration: 400 });
-
-// Tween with custom interpolation (e.g., for colors)
+// Tween a color (hex string)
 const color = new Tween("#ff0000", {
   duration: 800,
+  easing: cubicInOut,
   interpolate: (from, to) => {
+    const fromR = parseInt(from.slice(1, 3), 16);
+    const fromG = parseInt(from.slice(3, 5), 16);
+    const fromB = parseInt(from.slice(5, 7), 16);
+    const toR = parseInt(to.slice(1, 3), 16);
+    const toG = parseInt(to.slice(3, 5), 16);
+    const toB = parseInt(to.slice(5, 7), 16);
+
     // Return a function that takes t (0 to 1) and returns the interpolated value
     return (t) => {
-      const r = Math.round(parseInt(from.slice(1, 3), 16) * (1 - t) + parseInt(to.slice(1, 3), 16) * t);
-      const g = Math.round(parseInt(from.slice(3, 5), 16) * (1 - t) + parseInt(to.slice(3, 5), 16) * t);
-      const b = Math.round(parseInt(from.slice(5, 7), 16) * (1 - t) + parseInt(to.slice(5, 7), 16) * t);
+      const r = Math.round(fromR + (toR - fromR) * t);
+      const g = Math.round(fromG + (toG - fromG) * t);
+      const b = Math.round(fromB + (toB - fromB) * t);
       return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
     };
   }
 });
 ```
 
-You can tween objects with multiple properties:
+For object values with numeric properties, `Tween` interpolates each property by default:
+
+```typescript
+// Tween an object with numeric properties — works out of the box
+const position = new Tween(
+  { x: 0, y: 0, rotation: 0 },
+  { duration: 500, easing: cubicOut }
+);
+
+position.set({ x: 200, y: 150, rotation: 45 });
+// position.current smoothly transitions all three values simultaneously
+```
+
+### Tween.of — Automatic Reactive Tracking
+
+The static `Tween.of` method creates a tween that automatically tracks a reactive expression. Instead of calling `.set()` manually, the tween follows whatever value the expression produces:
 
 ```svelte
 <script>
   import { Tween } from "svelte/motion";
+  import { cubicOut } from "svelte/easing";
 
-  const box = new Tween(
-    { x: 0, y: 0, rotation: 0 },
-    {
-      duration: 800,
-      interpolate: (from, to) => (t) => ({
-        x: from.x + (to.x - from.x) * t,
-        y: from.y + (to.y - from.y) * t,
-        rotation: from.rotation + (to.rotation - from.rotation) * t
-      })
-    }
-  );
+  let step = $state(0);
 
-  function moveToCorner(corner) {
-    const positions = {
-      topLeft: { x: 0, y: 0, rotation: 0 },
-      topRight: { x: 300, y: 0, rotation: 90 },
-      bottomRight: { x: 300, y: 300, rotation: 180 },
-      bottomLeft: { x: 0, y: 300, rotation: 270 }
-    };
-    box.set(positions[corner]);
-  }
+  // The tween automatically follows `step * 25`
+  const progress = Tween.of(() => step * 25, {
+    duration: 400,
+    easing: cubicOut
+  });
 </script>
 
-<div class="area">
-  <div
-    class="box"
-    style="transform: translate({box.current.x}px, {box.current.y}px) rotate({box.current.rotation}deg)"
-  ></div>
+<div class="bar-bg">
+  <div class="bar-fill" style="width: {progress.current}%"></div>
 </div>
 
-<div class="controls">
-  <button onclick={() => moveToCorner('topLeft')}>Top Left</button>
-  <button onclick={() => moveToCorner('topRight')}>Top Right</button>
-  <button onclick={() => moveToCorner('bottomRight')}>Bottom Right</button>
-  <button onclick={() => moveToCorner('bottomLeft')}>Bottom Left</button>
-</div>
+<p>Step {step} of 4 ({Math.round(progress.current)}%)</p>
 
-<style>
-  .area {
-    position: relative;
-    width: 350px;
-    height: 350px;
-    background: #f8f9fa;
-    border-radius: 12px;
-  }
-  .box {
-    position: absolute;
-    width: 50px;
-    height: 50px;
-    background: #3b82f6;
-    border-radius: 8px;
-  }
-</style>
+<button onclick={() => step = Math.max(0, step - 1)}>Previous</button>
+<button onclick={() => step = Math.min(4, step + 1)}>Next</button>
 ```
 
-### Tween.of() — Reactive Tracking
-
-The static `Tween.of` method creates a tween that automatically tracks a reactive expression. Whenever the expression's value changes, the tween animates to the new value:
-
-```svelte
-<script>
-  import { Tween } from "svelte/motion";
-
-  let target = $state(0);
-  const tweened = Tween.of(() => target, { duration: 400 });
-
-  function increment() {
-    target += 10;
-  }
-
-  function reset() {
-    target = 0;
-  }
-</script>
-
-<p>Target: {target}</p>
-<p>Tweened: {Math.round(tweened.current)}</p>
-
-<button onclick={increment}>+10</button>
-<button onclick={reset}>Reset</button>
-```
-
-The key difference between `Tween.of()` and manually calling `tween.set()`:
-
-- **`Tween.of(() => expr)`**: The tween passively follows the reactive expression. You update `target` and the tween reacts automatically. You do not call `.set()` at all.
-- **`new Tween(initial)` + `.set()`**: You imperatively drive the tween. You decide when and what to animate.
-
-Use `Tween.of()` when the animated value is derived from reactive state. Use `new Tween()` + `.set()` when you want explicit control over when animations happen (e.g., in event handlers).
+This is cleaner than manually calling `.set()` in an `$effect` — `Tween.of` handles the subscription and cleanup internally. Use `.of()` when the target value comes from reactive state; use `.set()` when the target comes from imperative events (button clicks, timers, external callbacks).
 
 ### Tweened Gauge Component
 
-Here is a complete reusable gauge component that demonstrates Tween in a production context:
+Here is a complete reusable gauge component that demonstrates Tween in a production context with SVG:
 
 ```svelte
+<!-- Gauge.svelte -->
 <script>
   import { Tween } from "svelte/motion";
   import { cubicOut } from "svelte/easing";
@@ -414,13 +521,15 @@ Here is a complete reusable gauge component that demonstrates Tween in a product
 </style>
 ```
 
+This component animates both the SVG arc and the displayed number whenever the `value` prop changes. Notice that `Tween.of()` is the right choice here — the animation should follow the reactive `value` prop, not be triggered imperatively.
+
 ## Spring — Physics-Based Motion
 
-While `Tween` follows a fixed easing curve, `Spring` simulates physical spring dynamics. The value overshoots, oscillates, and settles naturally — perfect for drag interactions and playful UI.
+While `Tween` follows a fixed easing curve with a predetermined duration, `Spring` simulates physical spring dynamics. The value overshoots, oscillates, and settles naturally — and the animation duration is emergent from the physics parameters, not specified directly. This is perfect for drag interactions and playful UI where the motion should feel physical rather than choreographed.
 
-### The Physics Behind Spring
+### The Physics Model
 
-A Spring simulates a damped harmonic oscillator. The equation of motion is:
+A Spring simulates a damped harmonic oscillator — a mass attached to a spring with friction. The equation of motion is:
 
 ```
 F = -kx - cv
@@ -437,7 +546,22 @@ Where `k` is the spring constant (stiffness), `x` is the displacement from equil
 
 This means Spring has no fixed duration. A stiff, heavily damped spring might settle in 200ms. A loose, lightly damped spring might oscillate for 2 seconds. The animation runs until the physics simulation naturally comes to rest.
 
-### Basic Usage
+### Spring Parameters and Their Feel
+
+| Parameter | Range | Effect |
+|-----------|-------|--------|
+| `stiffness` | 0 to 1 | Higher = faster, snappier motion. Controls how aggressively the spring pulls toward the target |
+| `damping` | 0 to 1 | Higher = less oscillation, settles faster. Controls how quickly energy is dissipated |
+| `precision` | 0.001+ | How close to the target before the animation stops. Lower = more precise but more frames |
+
+Understanding the interplay between stiffness and damping is essential for getting the right feel:
+
+| Stiffness | Damping | Feel | Use case |
+|-----------|---------|------|----------|
+| High (0.3+) | High (0.7+) | Quick, no bounce | Toggle switches, menus |
+| High (0.3+) | Low (0.2-0.4) | Quick, bouncy | Notifications, badges |
+| Low (0.05-0.15) | Low (0.2-0.3) | Slow, bouncy | Drag-and-drop, playful elements |
+| Low (0.05-0.15) | High (0.7+) | Slow, smooth | Background parallax, gentle reveals |
 
 ```svelte
 <script>
@@ -496,20 +620,73 @@ This means Spring has no fixed duration. A stiff, heavily damped spring might se
 </style>
 ```
 
-### Spring Parameters Explained
+### Spring.of — Automatic Reactive Tracking
 
-| Parameter | Range | Effect |
-|-----------|-------|--------|
-| `stiffness` | 0 to 1 | Higher = faster, snappier motion. Controls how aggressively the spring pulls toward the target. |
-| `damping` | 0 to 1 | Higher = less oscillation, settles faster. Controls how quickly energy is dissipated. |
-| `precision` | 0.001+ | How close to the target before the animation stops. Lower = more precise but more frames. |
+Like `Tween`, `Spring` has a static `.of()` method for tracking reactive expressions:
 
-Understanding the interplay:
+```svelte
+<script>
+  import { Spring } from "svelte/motion";
 
-- **Low stiffness + low damping** = slow, bouncy, jelly-like. Good for playful UI elements, mascot animations.
-- **High stiffness + low damping** = fast and bouncy, snaps to position then oscillates. Good for notifications, badges, attention-grabbing elements.
-- **Low stiffness + high damping** = slow, smooth, no bounce. Good for background movements, parallax effects.
-- **High stiffness + high damping** = fast, crisp, no bounce. Behaves similar to a tween. Good for precise UI, cursor followers, tooltips.
+  let selectedIndex = $state(0);
+  const tabs = ['Home', 'Projects', 'Settings'];
+
+  // The indicator position follows the selected tab with spring physics
+  const indicatorX = Spring.of(() => selectedIndex * 100, {
+    stiffness: 0.15,
+    damping: 0.3
+  });
+</script>
+
+<div class="tab-bar">
+  {#each tabs as tab, i}
+    <button
+      class="tab"
+      class:active={selectedIndex === i}
+      onclick={() => selectedIndex = i}
+    >
+      {tab}
+    </button>
+  {/each}
+  <div class="indicator" style="left: {indicatorX.current}px"></div>
+</div>
+
+<style>
+  .tab-bar {
+    position: relative;
+    display: flex;
+  }
+
+  .tab {
+    width: 100px;
+    padding: 12px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-weight: 500;
+  }
+
+  .tab.active {
+    color: #3b82f6;
+  }
+
+  .indicator {
+    position: absolute;
+    bottom: 0;
+    width: 100px;
+    height: 3px;
+    background: #3b82f6;
+    border-radius: 2px;
+    transition: none;
+  }
+</style>
+```
+
+The indicator bounces slightly as it settles into position — a subtle touch that makes the UI feel alive without being distracting.
+
+### Interactive Spring Parameter Playground
+
+Understanding spring parameters is easier with a live playground where you can adjust values and see the effect immediately:
 
 ```svelte
 <script>
@@ -563,140 +740,54 @@ Understanding the interplay:
 </style>
 ```
 
-### Spring.of() — Reactive Tracking
+### Tween vs Spring: When to Use Which
 
-Like `Tween`, `Spring` has a static `.of()` method for automatically tracking reactive values:
+| Criterion | Tween | Spring |
+|-----------|-------|--------|
+| Duration | Fixed, known in advance | Emergent from physics |
+| Motion curve | Predefined easing function | Natural overshoot and settle |
+| Interruption | Restarts from current position with full duration | Preserves momentum from previous motion |
+| Use case | Progress bars, counters, gauges | Drag interactions, toggles, playful UI |
+| Predictability | High — same duration every time | Lower — duration depends on distance and current velocity |
+| Accessibility | Easy to set `duration: 0` | Set `stiffness: 1, damping: 1` for instant |
+
+The key difference is interruption behavior. When you call `.set()` on a `Tween` mid-animation, it starts a new animation from the current position with the full duration. When you call `.set()` on a `Spring` mid-animation, the spring keeps its current velocity and redirects toward the new target. This velocity preservation is why springs feel better for mouse-following and drag-and-drop — the element never "stops and restarts."
 
 ```svelte
 <script>
-  import { Spring } from "svelte/motion";
+  import { Tween, Spring } from "svelte/motion";
+  import { cubicOut } from "svelte/easing";
 
-  let target = $state({ x: 0, y: 0 });
-  const springCoords = Spring.of(() => target, { stiffness: 0.1, damping: 0.25 });
+  // Compare the two by moving your mouse quickly side to side
+  const tweenX = new Tween(0, { duration: 400, easing: cubicOut });
+  const springX = new Spring(0, { stiffness: 0.15, damping: 0.4 });
 
-  function handleClick(event) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    target = {
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top
-    };
+  function handleMouseMove(event) {
+    const x = event.clientX;
+    tweenX.set(x);
+    springX.set(x);
   }
 </script>
 
-<div class="area" onclick={handleClick}>
-  <div
-    class="dot"
-    style="left: {springCoords.current.x}px; top: {springCoords.current.y}px"
-  ></div>
-  <p>Click anywhere</p>
+<svelte:window onmousemove={handleMouseMove} />
+
+<div class="comparison">
+  <div class="dot tween" style="left: {tweenX.current}px">Tween</div>
+  <div class="dot spring" style="left: {springX.current}px">Spring</div>
 </div>
 ```
 
-### Building a Drag-to-Reorder List with Spring
+Move your mouse quickly and change direction — the tween dot feels like it "fights" direction changes, while the spring dot carries momentum naturally.
 
-This is one of the most satisfying interactions to build: a list where items can be dragged to reorder, with spring physics making the movement feel physical and natural:
+### Pointer-Based Drag with Spring
 
-```svelte
-<script>
-  import { Spring } from "svelte/motion";
-  import { flip } from "svelte/animate";
-
-  let items = $state([
-    { id: 1, text: "Design mockups", color: "#dbeafe" },
-    { id: 2, text: "Write API docs", color: "#dcfce7" },
-    { id: 3, text: "Review PRs", color: "#fef3c7" },
-    { id: 4, text: "Ship release", color: "#fce7f3" },
-    { id: 5, text: "Update tests", color: "#e0e7ff" }
-  ]);
-
-  let draggingId = $state(null);
-  let dragOffset = new Spring({ x: 0, y: 0 }, { stiffness: 0.2, damping: 0.7 });
-
-  function handleDragStart(event, id) {
-    draggingId = id;
-    event.dataTransfer.effectAllowed = "move";
-    // Make the drag image transparent
-    const img = new Image();
-    img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-    event.dataTransfer.setDragImage(img, 0, 0);
-  }
-
-  function handleDragOver(event, targetId) {
-    event.preventDefault();
-    if (draggingId === null || draggingId === targetId) return;
-
-    const fromIndex = items.findIndex(i => i.id === draggingId);
-    const toIndex = items.findIndex(i => i.id === targetId);
-
-    if (fromIndex === -1 || toIndex === -1) return;
-
-    const reordered = [...items];
-    const [moved] = reordered.splice(fromIndex, 1);
-    reordered.splice(toIndex, 0, moved);
-    items = reordered;
-  }
-
-  function handleDragEnd() {
-    draggingId = null;
-  }
-</script>
-
-<ul>
-  {#each items as item (item.id)}
-    <li
-      animate:flip={{ duration: 300 }}
-      draggable="true"
-      class:dragging={draggingId === item.id}
-      style="background: {item.color}"
-      ondragstart={(e) => handleDragStart(e, item.id)}
-      ondragover={(e) => handleDragOver(e, item.id)}
-      ondragend={handleDragEnd}
-    >
-      <span class="handle">&#9776;</span>
-      {item.text}
-    </li>
-  {/each}
-</ul>
-
-<style>
-  ul {
-    list-style: none;
-    padding: 0;
-    max-width: 400px;
-  }
-
-  li {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 14px 16px;
-    margin-bottom: 6px;
-    border-radius: 8px;
-    cursor: grab;
-    user-select: none;
-  }
-
-  li.dragging {
-    opacity: 0.5;
-    cursor: grabbing;
-  }
-
-  .handle {
-    color: #94a3b8;
-    font-size: 1.1rem;
-  }
-</style>
-```
-
-### Pointer-Based Drag with Spring (No HTML Drag API)
-
-For a more fluid feel, you can use pointer events with Spring for the drag offset. This gives you smooth, physics-based drag that works on touch devices:
+For a fluid drag-and-release interaction, use pointer events with Spring physics. The element follows the pointer during drag and springs back to its origin on release:
 
 ```svelte
 <script>
   import { Spring } from "svelte/motion";
 
-  const position = new Spring({ x: 100, y: 100 }, {
+  const position = new Spring({ x: 150, y: 150 }, {
     stiffness: 0.2,
     damping: 0.4
   });
@@ -776,11 +867,11 @@ For a more fluid feel, you can use pointer events with Spring for the drag offse
 </style>
 ```
 
-When the user releases the element, the Spring animates it back to center with natural physics — it overshoots, oscillates, and settles. The `stiffness: 0.2` and `damping: 0.4` give a satisfying bounce.
+When the user releases the element, the Spring animates it back to center with natural physics — it overshoots, oscillates, and settles. The `stiffness: 0.2` and `damping: 0.4` give a satisfying bounce. The `setPointerCapture` call ensures the element continues receiving pointer events even if the cursor moves outside the element during fast drags.
 
 ## Combining Transitions with animate:flip
 
-The real power emerges when you combine `animate:flip` for moving items with `transition:` for entering and leaving items. This creates the complete experience — items fade in when added, fade out when removed, and slide smoothly when others around them change position:
+The real power emerges when you combine `animate:flip` for moving items with `transition:` for entering and leaving items. This creates the complete experience — items fade in when added, fade out when removed, and the remaining items smoothly slide to fill the gap, all happening simultaneously:
 
 ```svelte
 <script>
@@ -860,23 +951,194 @@ The real power emerges when you combine `animate:flip` for moving items with `tr
 </style>
 ```
 
-When you add an item, it flies in from above. When you remove one, it fades out. And the remaining items smoothly slide to fill the gap, all happening simultaneously.
+### The Timing Coordination Problem
 
-### Why This Combination Works
+There is a subtle gotcha when combining transitions with FLIP. During the `out` transition, the leaving element still occupies space in the DOM. The FLIP animation for remaining elements starts from positions that include the leaving element, but animates to positions where the leaving element is gone. This usually works well because the FLIP animation and the out transition run simultaneously.
 
-The three directives serve complementary roles:
+However, if the out transition duration is much longer than the FLIP duration, you get a visual glitch: the remaining items finish animating to their new positions while the leaving element is still visible and fading out, creating a gap that suddenly collapses:
 
-- **`in:fly`** handles the entering element only. It has no effect on existing elements.
-- **`out:fade`** handles the departing element only. Svelte keeps the element in the DOM until the outro completes, then removes it.
-- **`animate:flip`** watches all *remaining* elements. After the DOM change (add or remove), it detects position shifts and animates them.
+```svelte
+<!-- WRONG: Out transition is much longer than FLIP — creates a visual gap -->
+<li
+  animate:flip={{ duration: 200 }}
+  out:fade={{ duration: 1000 }}
+>
 
-The timing coordination is automatic: Svelte first records FLIP positions, applies the DOM change, records new FLIP positions, then starts both the transition and the FLIP animation simultaneously. Items slide out of the way while the new item flies in.
+<!-- CORRECT: Keep durations in the same ballpark -->
+<li
+  animate:flip={{ duration: 300 }}
+  out:fade={{ duration: 250 }}
+>
+```
+
+A good rule of thumb: the out transition duration should be less than or equal to the FLIP duration. This way, the leaving element has disappeared by the time the remaining items finish settling.
+
+### Crossfade — The Transition Pair
+
+For elements that move between two different `{#each}` blocks (like moving a task between columns), Svelte provides `crossfade` from `svelte/transition`. It creates a matched pair of transitions: the element appears to fly from its old container to the new one:
+
+```svelte
+<script>
+  import { flip } from "svelte/animate";
+  import { crossfade } from "svelte/transition";
+  import { quintOut } from "svelte/easing";
+
+  const [send, receive] = crossfade({
+    duration: 400,
+    easing: quintOut,
+    fallback(node) {
+      // Fallback for items without a matching pair (e.g., newly created)
+      return {
+        duration: 300,
+        css: (t) => `opacity: ${t}`
+      };
+    }
+  });
+
+  let todo = $state([
+    { id: 1, text: "Design the UI" },
+    { id: 2, text: "Write the API" },
+    { id: 3, text: "Add tests" }
+  ]);
+
+  let done = $state([
+    { id: 4, text: "Set up repo" }
+  ]);
+
+  function markDone(id) {
+    const item = todo.find(t => t.id === id);
+    if (!item) return;
+    todo = todo.filter(t => t.id !== id);
+    done = [...done, item];
+  }
+
+  function markTodo(id) {
+    const item = done.find(t => t.id === id);
+    if (!item) return;
+    done = done.filter(t => t.id !== id);
+    todo = [...todo, item];
+  }
+</script>
+
+<div class="board">
+  <div class="column">
+    <h2>To Do</h2>
+    {#each todo as item (item.id)}
+      <div
+        animate:flip={{ duration: 300 }}
+        in:receive={{ key: item.id }}
+        out:send={{ key: item.id }}
+      >
+        <span>{item.text}</span>
+        <button onclick={() => markDone(item.id)}>Done</button>
+      </div>
+    {/each}
+  </div>
+
+  <div class="column">
+    <h2>Done</h2>
+    {#each done as item (item.id)}
+      <div
+        animate:flip={{ duration: 300 }}
+        in:receive={{ key: item.id }}
+        out:send={{ key: item.id }}
+      >
+        <span>{item.text}</span>
+        <button onclick={() => markTodo(item.id)}>Undo</button>
+      </div>
+    {/each}
+  </div>
+</div>
+
+<style>
+  .board {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  .column {
+    background: #f8f9fa;
+    border-radius: 12px;
+    padding: 16px;
+  }
+
+  .column > div {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    margin-bottom: 6px;
+    background: white;
+    border-radius: 8px;
+    border: 1px solid #e5e7eb;
+  }
+</style>
+```
+
+The `key` parameter matches elements across the two lists. When an item is removed from `todo` and added to `done`, `send` records the old position and `receive` animates from that position to the new one. The `fallback` function handles items that have no matching pair (e.g., items that are freshly created, not moved between lists).
+
+## Performance Considerations
+
+Motion animations run on every animation frame (60fps = every 16.7ms). In most cases this is fine, but there are situations where performance degrades.
+
+### Large Lists with animate:flip
+
+FLIP requires measuring the position of every element in the list before and after the update. For 10 items this is trivial. For 1000 items it means 2000 `getBoundingClientRect()` calls — enough to cause a visible frame drop:
+
+```svelte
+<!-- Caution: FLIP on very large lists -->
+{#each thousandItems as item (item.id)}
+  <li animate:flip={{ duration: 300 }}>{item.name}</li>
+{/each}
+
+<!-- Better: Virtualize the list, only FLIP visible items -->
+{#each visibleItems as item (item.id)}
+  <li animate:flip={{ duration: 300 }}>{item.name}</li>
+{/each}
+```
+
+### GPU-Accelerated Properties
+
+Not all CSS properties animate equally. Some trigger layout recalculations, others only trigger repaint, and a few run entirely on the GPU compositor:
+
+| Property | Cost | GPU? | Notes |
+|----------|------|------|-------|
+| `transform` | Very low | Yes | Translate, scale, rotate — always prefer this |
+| `opacity` | Very low | Yes | Fading is nearly free |
+| `filter` | Low | Yes (usually) | blur, brightness, contrast |
+| `width` / `height` | High | No | Triggers layout — avoid in animations |
+| `top` / `left` | High | No | Triggers layout — use transform instead |
+| `box-shadow` | High | No | Complex repaints |
+
+For Tween and Spring, this means you should animate `transform` and `opacity` whenever possible:
+
+```svelte
+<script>
+  import { Spring } from "svelte/motion";
+
+  const spring = new Spring({ x: 0, y: 0, scale: 1 }, {
+    stiffness: 0.15,
+    damping: 0.7
+  });
+</script>
+
+<!-- WRONG: animating left/top triggers layout on every frame -->
+<div style="left: {spring.current.x}px; top: {spring.current.y}px; position: absolute;">
+
+<!-- CORRECT: animating transform runs on the GPU -->
+<div style="transform: translate({spring.current.x}px, {spring.current.y}px) scale({spring.current.scale});">
+```
+
+The difference is dramatic: the `transform` version runs at a consistent 60fps even with dozens of animated elements. The `left/top` version can drop to 30fps or worse because every frame triggers a full layout recalculation.
+
+### Multiple Springs and Frame Budgets
+
+Each `Spring` runs its own animation loop. Having 50 springs all tracking mouse position means 50 calculations per frame. This is usually fine on modern hardware, but test on your target devices. For trail effects with many elements, consider reducing the number of animated elements or increasing the `precision` parameter to let springs settle earlier.
 
 ## Respecting prefers-reduced-motion
 
 Some users configure their operating system to reduce animations — because of motion sensitivity, vestibular disorders, or personal preference. You should always respect this setting.
-
-### Using prefersReducedMotion from svelte/motion
 
 Svelte 5.7+ provides a built-in `prefersReducedMotion` reactive object from `svelte/motion` that tracks the user's preference automatically:
 
@@ -901,62 +1163,61 @@ Svelte 5.7+ provides a built-in `prefersReducedMotion` reactive object from `sve
 
 `prefersReducedMotion` is a `MediaQuery` object — read `.current` to get the boolean value. It updates reactively when the user changes their OS setting. No manual `matchMedia` wiring needed.
 
-### Using MediaQuery from svelte/reactivity
+### Building a Motion-Safe Helper
 
-If you need a manual approach (for example, in environments where `svelte/motion` does not have `prefersReducedMotion`, or when you need additional media queries), you can use `MediaQuery` from `svelte/reactivity`:
+Instead of checking `prefersReducedMotion` in every component, create a utility that wraps your animation parameters:
+
+```typescript
+// src/lib/utils/motion.ts
+import { prefersReducedMotion } from "svelte/motion";
+
+/** Returns 0 if reduced motion is preferred, otherwise the given value. */
+export function motionSafe(value: number): number {
+  return prefersReducedMotion.current ? 0 : value;
+}
+
+/** Returns instant spring params when reduced motion is preferred. */
+export function safeSpringParams(params: { stiffness: number; damping: number }) {
+  if (prefersReducedMotion.current) {
+    return { stiffness: 1, damping: 1 }; // Instant, no bounce
+  }
+  return params;
+}
+```
+
+```svelte
+<script>
+  import { flip } from "svelte/animate";
+  import { fly, fade } from "svelte/transition";
+  import { Spring } from "svelte/motion";
+  import { motionSafe, safeSpringParams } from "$lib/utils/motion";
+
+  const coords = new Spring({ x: 0, y: 0 }, safeSpringParams({
+    stiffness: 0.1,
+    damping: 0.25
+  }));
+</script>
+
+{#each items as item (item.id)}
+  <li
+    animate:flip={{ duration: motionSafe(300) }}
+    in:fly={{ y: motionSafe(-20), duration: motionSafe(300) }}
+    out:fade={{ duration: motionSafe(200) }}
+  >
+    {item.text}
+  </li>
+{/each}
+```
+
+If you need a manual approach (for example, in environments where the `prefersReducedMotion` export is not available), you can use `MediaQuery` from `svelte/reactivity`:
 
 ```svelte
 <script>
   import { MediaQuery } from "svelte/reactivity";
 
   const reducedMotion = new MediaQuery("(prefers-reduced-motion: reduce)");
-  const prefersColorScheme = new MediaQuery("(prefers-color-scheme: dark)");
-
   let transitionDuration = $derived(reducedMotion.current ? 0 : 300);
 </script>
-```
-
-`MediaQuery` is a general-purpose reactive wrapper around `window.matchMedia`. It works with any valid CSS media query string. The `.current` property is a reactive boolean that updates whenever the media query result changes.
-
-### Creating a Motion-Safe Wrapper
-
-For larger projects, centralize your motion preference handling:
-
-```typescript
-// src/lib/motion.ts
-import { prefersReducedMotion } from "svelte/motion";
-
-export function motionSafe(duration: number): number {
-  return prefersReducedMotion.current ? 0 : duration;
-}
-
-export function getFlipDuration(baseDuration = 300): number {
-  return prefersReducedMotion.current ? 0 : baseDuration;
-}
-
-export function getSpringConfig(opts: { stiffness: number; damping: number }) {
-  if (prefersReducedMotion.current) {
-    return { stiffness: 1, damping: 1 }; // Instant, no bounce
-  }
-  return opts;
-}
-```
-
-```svelte
-<script>
-  import { motionSafe, getFlipDuration } from "$lib/motion";
-  import { flip } from "svelte/animate";
-  import { fade } from "svelte/transition";
-</script>
-
-{#each items as item (item.id)}
-  <li
-    animate:flip={{ duration: getFlipDuration() }}
-    out:fade={{ duration: motionSafe(200) }}
-  >
-    {item.text}
-  </li>
-{/each}
 ```
 
 Setting `duration: 0` effectively disables the animation while keeping the transition logic intact. This is cleaner than conditionally removing the `transition:` directive entirely, because the element still enters and leaves the DOM correctly.
@@ -972,318 +1233,162 @@ You can also handle this with pure CSS as a complementary approach:
 }
 ```
 
-## Performance: GPU-Accelerated Properties
+However, the CSS approach only affects CSS-driven animations. `Tween` and `Spring` are JavaScript-driven — they update reactive values in `requestAnimationFrame` and do not respond to CSS media queries. You must handle them explicitly with the `prefersReducedMotion` check.
 
-Not all CSS properties animate equally. Some trigger layout recalculations, others only trigger repaint, and a few run entirely on the GPU compositor:
+## Animated Number Displays
 
-| Property | Cost | GPU? | Notes |
-|----------|------|------|-------|
-| `transform` | Very low | Yes | Translate, scale, rotate, skew — always prefer this |
-| `opacity` | Very low | Yes | Fading is nearly free |
-| `filter` | Low | Yes (usually) | blur, brightness, contrast |
-| `clip-path` | Low-Medium | Sometimes | Depends on browser and complexity |
-| `background-color` | Medium | No | Triggers repaint but no layout |
-| `width` / `height` | High | No | Triggers layout — avoid in animations |
-| `top` / `left` | High | No | Triggers layout — use transform instead |
-| `box-shadow` | High | No | Complex repaints — animate opacity of a pseudo-element instead |
-
-For Tween and Spring, this means you should animate `transform` and `opacity` whenever possible:
+A common pattern is animating displayed numbers — scores, statistics, prices, timers. `Tween` handles this elegantly, but there are formatting details to get right:
 
 ```svelte
 <script>
-  import { Spring } from "svelte/motion";
-
-  const spring = new Spring({ x: 0, y: 0, scale: 1 }, {
-    stiffness: 0.15,
-    damping: 0.7
-  });
-</script>
-
-<!-- WRONG — animating left/top triggers layout on every frame -->
-<div style="left: {spring.current.x}px; top: {spring.current.y}px; position: absolute;">
-
-<!-- CORRECT — animating transform runs on the GPU -->
-<div style="transform: translate({spring.current.x}px, {spring.current.y}px) scale({spring.current.scale});">
-```
-
-The difference is dramatic: the `transform` version runs at a consistent 60fps even with dozens of animated elements. The `left/top` version can drop to 30fps or worse because every frame triggers a full layout recalculation of the entire page.
-
-### Promoting Elements to Their Own Layer
-
-For elements you know will animate, you can promote them to their own compositor layer with `will-change`:
-
-```css
-.animated-element {
-  will-change: transform, opacity;
-}
-```
-
-This tells the browser to put the element on its own GPU layer *before* the animation starts, avoiding a jank-inducing layer promotion during the first frame. Remove `will-change` after the animation ends if the element will not animate again, as each layer consumes GPU memory.
-
-## Complete Interactive Dashboard Example
-
-Here is a complete example combining Tween, Spring, transitions, and FLIP for an interactive dashboard:
-
-```svelte
-<script>
-  import { Tween, Spring, prefersReducedMotion } from "svelte/motion";
-  import { flip } from "svelte/animate";
-  import { fly, fade } from "svelte/transition";
+  import { Tween } from "svelte/motion";
   import { cubicOut } from "svelte/easing";
 
-  // Dashboard metrics with tweened values
-  const revenue = new Tween(0, { duration: 1200, easing: cubicOut });
-  const users = new Tween(0, { duration: 1000, easing: cubicOut });
-  const uptime = new Tween(0, { duration: 800, easing: cubicOut });
+  let targetScore = $state(0);
 
-  // Badge that springs when count changes
-  let notificationCount = $state(3);
-  const badgeScale = new Spring(1, { stiffness: 0.3, damping: 0.4 });
-
-  // Animate metrics on mount
-  $effect(() => {
-    revenue.set(48523);
-    users.set(1247);
-    uptime.set(99.9);
+  const displayScore = Tween.of(() => targetScore, {
+    duration: 800,
+    easing: cubicOut
   });
 
-  // Activity feed
-  let activities = $state([
-    { id: 1, text: "User signed up", time: "2m ago" },
-    { id: 2, text: "Payment received", time: "5m ago" },
-    { id: 3, text: "Report generated", time: "12m ago" }
-  ]);
+  let formattedScore = $derived(
+    Math.round(displayScore.current).toLocaleString('en-US')
+  );
 
-  let nextActivityId = 4;
-
-  function addActivity() {
-    const texts = [
-      "New order placed",
-      "User upgraded plan",
-      "Support ticket closed",
-      "Feature deployed"
-    ];
-    activities = [
-      {
-        id: nextActivityId++,
-        text: texts[Math.floor(Math.random() * texts.length)],
-        time: "just now"
-      },
-      ...activities
-    ].slice(0, 8);
-
-    // Bounce the badge
-    notificationCount++;
-    badgeScale.set(1.4);
-    setTimeout(() => badgeScale.set(1), 150);
-  }
-
-  function removeActivity(id) {
-    activities = activities.filter(a => a.id !== id);
-  }
-
-  function dur(ms) {
-    return prefersReducedMotion.current ? 0 : ms;
+  function addPoints(points) {
+    targetScore += points;
   }
 </script>
 
-<div class="dashboard">
-  <div class="metrics">
-    <div class="metric" in:fly={{ y: 20, duration: dur(400) }}>
-      <span class="value">${Math.round(revenue.current).toLocaleString()}</span>
-      <span class="label">Revenue</span>
-    </div>
-    <div class="metric" in:fly={{ y: 20, duration: dur(400), delay: 100 }}>
-      <span class="value">{Math.round(users.current).toLocaleString()}</span>
-      <span class="label">Users</span>
-    </div>
-    <div class="metric" in:fly={{ y: 20, duration: dur(400), delay: 200 }}>
-      <span class="value">{uptime.current.toFixed(1)}%</span>
-      <span class="label">Uptime</span>
-    </div>
-  </div>
+<div class="score-display">
+  <span class="label">Score</span>
+  <span class="value">{formattedScore}</span>
+</div>
 
-  <div class="feed-header">
-    <h3>Activity Feed</h3>
-    <button onclick={addActivity}>
-      Simulate Event
-      <span
-        class="badge"
-        style="transform: scale({badgeScale.current})"
-      >
-        {notificationCount}
-      </span>
-    </button>
-  </div>
-
-  <ul class="feed">
-    {#each activities as activity (activity.id)}
-      <li
-        animate:flip={{ duration: dur(300) }}
-        in:fly={{ x: -30, duration: dur(300) }}
-        out:fade={{ duration: dur(200) }}
-      >
-        <span>{activity.text}</span>
-        <span class="time">{activity.time}</span>
-        <button class="dismiss" onclick={() => removeActivity(activity.id)}>x</button>
-      </li>
-    {/each}
-  </ul>
+<div class="controls">
+  <button onclick={() => addPoints(100)}>+100</button>
+  <button onclick={() => addPoints(500)}>+500</button>
+  <button onclick={() => addPoints(1000)}>+1,000</button>
+  <button onclick={() => targetScore = 0}>Reset</button>
 </div>
 
 <style>
-  .dashboard { max-width: 600px; }
-
-  .metrics {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 16px;
-    margin-bottom: 24px;
+  .score-display {
+    text-align: center;
+    padding: 24px;
   }
 
-  .metric {
-    padding: 20px;
-    background: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 12px;
-    text-align: center;
+  .label {
+    display: block;
+    font-size: 0.875rem;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
   }
 
   .value {
     display: block;
-    font-size: 1.5rem;
+    font-size: 3rem;
     font-weight: bold;
-    color: #1e293b;
+    font-variant-numeric: tabular-nums; /* Prevents layout shift as digits change */
+    color: #1a1a1a;
   }
 
-  .label {
-    color: #64748b;
-    font-size: 0.85rem;
-    margin-top: 4px;
-  }
-
-  .feed-header {
+  .controls {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 12px;
-  }
-
-  .feed-header button {
-    display: flex;
-    align-items: center;
     gap: 8px;
-    padding: 8px 14px;
+    justify-content: center;
+  }
+
+  button {
+    padding: 8px 16px;
     border: 1px solid #ddd;
     border-radius: 6px;
     background: white;
     cursor: pointer;
   }
-
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    background: #ef4444;
-    color: white;
-    border-radius: 50%;
-    font-size: 0.75rem;
-    font-weight: bold;
-  }
-
-  .feed {
-    list-style: none;
-    padding: 0;
-  }
-
-  .feed li {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-    margin-bottom: 6px;
-    background: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-  }
-
-  .time {
-    margin-left: auto;
-    color: #94a3b8;
-    font-size: 0.8rem;
-  }
-
-  .dismiss {
-    padding: 2px 8px;
-    border: 1px solid #e5e7eb;
-    border-radius: 4px;
-    background: white;
-    cursor: pointer;
-    color: #94a3b8;
-    font-size: 0.85rem;
-  }
 </style>
 ```
 
-This dashboard demonstrates every concept from this lesson working together: tweened metrics that count up on load, a spring-animated notification badge, FLIP animations on the activity list, fly-in transitions for new items, and fade-out transitions for dismissed items — all wrapped in a `prefersReducedMotion` check.
+The `font-variant-numeric: tabular-nums` CSS property is critical — without it, digits have variable widths and the display jitters as numbers change. With tabular numbers, each digit has the same width, creating a stable layout.
 
-## Legacy API: tweened() and spring() Stores
+## The Legacy API: tweened() and spring()
 
-Older Svelte code uses the function-based API from `svelte/motion`:
+Before Svelte 5, motion values used store-based functions. You will encounter these in older codebases:
 
-```typescript
-// Legacy (still works but deprecated)
-import { tweened, spring } from "svelte/motion";
+```svelte
+<!-- DEPRECATED: Svelte 4 store-based API -->
+<script>
+  import { tweened } from "svelte/motion";
+  import { spring } from "svelte/motion";
 
-const progress = tweened(0, { duration: 400 });
-$: console.log($progress); // Subscribe with $ prefix
+  const progress = tweened(0, { duration: 400 });
+  const coords = spring({ x: 0, y: 0 });
 
-progress.set(100);
-progress.update(n => n + 10);
+  // Access value with $ prefix (store subscription)
+  // $progress, $coords.x, $coords.y
+</script>
 
-// Modern (recommended for new code)
-import { Tween, Spring } from "svelte/motion";
-
-const progress = new Tween(0, { duration: 400 });
-console.log(progress.current); // Read .current property
-
-progress.set(100);
+<div style="width: {$progress}%"></div>
 ```
 
-Key differences:
-- Legacy stores use `$storeName` to read the value; classes use `.current`.
-- Legacy stores use `.update(fn)` for relative changes; classes do not have `.update()` — use `.set(newValue)` instead.
-- Legacy stores work with Svelte's store contract (`subscribe`, `set`); classes work with Svelte 5's signal system.
-- The class-based API supports `.of()` for reactive tracking, which the legacy API lacks.
+```svelte
+<!-- CURRENT: Svelte 5 class-based API -->
+<script>
+  import { Tween, Spring } from "svelte/motion";
 
-If you are writing new code, use the class-based API exclusively.
+  const progress = new Tween(0, { duration: 400 });
+  const coords = new Spring({ x: 0, y: 0 });
+
+  // Access value with .current
+  // progress.current, coords.current.x, coords.current.y
+</script>
+
+<div style="width: {progress.current}%"></div>
+```
+
+The class-based API has several advantages:
+
+1. **No `$` magic**: `.current` is explicit, not compiler-transformed syntax
+2. **Static `.of()` method**: Automatic reactive tracking without manual `$effect` + `.set()` wiring
+3. **Type safety**: TypeScript generics work naturally with classes
+4. **Consistency**: Matches other Svelte 5 reactive primitives like `$state` and `$derived`
+
+If you are migrating from Svelte 4, the conversion is mechanical: replace `tweened(initial, opts)` with `new Tween(initial, opts)`, replace `spring(initial, opts)` with `new Spring(initial, opts)`, and replace `$value` with `value.current`.
 
 ## Try It
 
-Build a "Sortable Task Board":
-- Create a list of tasks with name, priority (1-5), and creation date
-- Add buttons to sort by each field — when sorting, items should smoothly animate to their new positions with `animate:flip`
-- Add an "Add Task" button — new tasks should fly in from the left with `in:fly`
-- Add a delete button on each task — removed tasks should fade out and the remaining tasks should slide into place
-- Use a `Tween` value for a "completion progress" bar that updates as tasks are added and removed
-- Use a `Spring` value for a floating count badge that bounces when the count changes
-- Build a draggable element that springs back to its origin when released
-- Use `prefersReducedMotion` from `svelte/motion` to wrap all animation durations
-- Create an interactive parameter playground for Spring that lets users adjust stiffness and damping in real time
+Build a "Sortable Task Board" that combines all the motion tools covered in this lesson:
+
+1. **Task list with FLIP**: Create a list of 8 tasks, each with a name, priority (1-5), and creation date. Add buttons to sort by each field. When sorting, items should smoothly animate to their new positions with `animate:flip`. Use a stable `id` as the key — not the array index.
+
+2. **Add and remove with transitions**: Add an "Add Task" button that prepends a new task — new tasks should fly in from the left with `in:fly={{ x: -200, duration: 300 }}`. Add a delete button on each task — removed tasks should fade out with `out:fade={{ duration: 200 }}`. Remaining tasks should slide into place via `animate:flip`. Keep the out transition duration shorter than the FLIP duration.
+
+3. **Progress bar with Tween**: Show a "completion progress" bar at the top. Use `Tween.of()` to create a tween that automatically tracks `(completedTasks / totalTasks) * 100`. Include a checkbox on each task to mark it complete. The bar should smoothly animate as tasks are completed. Use `cubicOut` easing and 600ms duration. Display the animated percentage as a formatted number.
+
+4. **Count badge with Spring**: Display a floating badge showing the total task count. Use `Spring.of()` to track the count, with `stiffness: 0.15` and `damping: 0.3`. The badge should bounce when tasks are added or removed.
+
+5. **Crossfade between columns**: Split the board into "To Do" and "Done" columns. When a task is marked complete, it should animate from the "To Do" column to the "Done" column using `crossfade`. Provide an "Undo" button in the "Done" column that sends the task back. Use `animate:flip` within each column so remaining items slide into place.
+
+6. **Drag to reorder**: Implement pointer-based drag reordering on the task list using a `Spring` for the drag offset. When released, the item should spring back to its new position. Use `setPointerCapture` for reliable drag tracking.
+
+7. **Reduced motion**: Import `prefersReducedMotion` from `svelte/motion` and create a `motionSafe()` helper. Use it to set all durations to 0 and spring parameters to `{ stiffness: 1, damping: 1 }` when the user prefers reduced motion. Test by enabling "Reduce motion" in your OS accessibility settings.
 
 ## Key Takeaways
 
-- `animate:flip` smoothly animates elements when their position changes in a keyed `{#each}` block, using the FLIP technique (First, Last, Invert, Play) for GPU-accelerated position animation
-- FLIP works by recording positions before and after a DOM change, then animating a `transform` to bridge the difference — no layout thrashing during animation
-- `new Tween(value, options)` from `svelte/motion` interpolates between values over time — internally uses `requestAnimationFrame` with easing-shaped `t` values
-- `new Spring(value, options)` from `svelte/motion` provides physics-based motion simulating a damped harmonic oscillator — the animation has no fixed duration, it runs until the physics settles
-- Both `Tween` and `Spring` expose a `.current` property for the interpolated value, and a static `.of(fn)` method to automatically track reactive expressions
-- `Tween.set()` returns a Promise that resolves when the animation completes, enabling chained animations
-- Spring parameters: `stiffness` (0-1) controls pull force, `damping` (0-1) controls energy dissipation, `precision` controls the settling threshold
-- Combine `animate:flip` with `in:`/`out:` transitions for the complete experience: enter, exit, and reorder animations all at once
-- Always animate GPU-accelerated properties (`transform`, `opacity`, `filter`) instead of layout-triggering properties (`width`, `height`, `top`, `left`)
-- Use `prefersReducedMotion` from `svelte/motion` to respect the user's motion preference — set `duration: 0` when `.current` is true
-- The `interpolate` option on `Tween` lets you animate complex values like colors, objects, or any type with a custom interpolation function
-- The legacy `tweened()` and `spring()` store functions still work but are deprecated — use the class-based API for new code
+- `animate:flip` smoothly animates elements when their position changes in a keyed `{#each}` block — the key must be a stable unique identifier from your data, never the array index
+- FLIP uses CSS transforms for animation, running on the compositor thread without triggering layout recalculations — this is why it performs well even with many elements
+- The key `(item.id)` expression is non-negotiable: without it, Svelte updates content in place instead of moving elements, and FLIP does nothing
+- `new Tween(value, options)` from `svelte/motion` interpolates between values over time with a fixed duration and easing curve — great for progress bars, counters, and gauges where you need the intermediate value in your template
+- Always specify an easing function for Tween — the default `linear` looks robotic; use `cubicOut` for most UI animations
+- `new Spring(value, options)` from `svelte/motion` provides physics-based motion with `stiffness` and `damping` — it preserves velocity on interruption, making it ideal for drag interactions and mouse-following elements
+- Both `Tween` and `Spring` expose a `.current` property for the interpolated value, and a static `.of(fn)` method to automatically track reactive expressions without manual `.set()` calls
+- The key behavioral difference: Tweens have fixed duration, Springs have emergent duration; Tweens restart on interruption, Springs redirect with preserved momentum
+- `tween.set()` returns a Promise — chain sequential animations with `await` or detect interruptions
+- Use `interpolate` on `Tween` to animate non-numeric values like colors, coordinates, or complex objects
+- Combine `animate:flip` with `in:`/`out:` transitions for the complete experience: enter, exit, and reorder animations all at once — keep out transition duration shorter than FLIP duration to avoid visual gaps
+- Use `crossfade` from `svelte/transition` for elements that move between different `{#each}` blocks — the `key` parameter matches items across lists
+- Animate GPU-accelerated properties (`transform`, `opacity`) instead of layout-triggering ones (`width`, `height`, `top`, `left`) — the performance difference is dramatic
+- Use `font-variant-numeric: tabular-nums` on animated number displays to prevent layout jitter as digits change width
+- Use `prefersReducedMotion` from `svelte/motion` to respect the user's motion preference — set `duration: 0` for tweens and transitions, and `stiffness: 1, damping: 1` for springs; CSS media queries do not affect JavaScript-driven motion
+- The legacy `tweened()` and `spring()` store functions still work but are deprecated — use the class-based `new Tween()` / `new Spring()` API with `.current` instead of the `$` prefix

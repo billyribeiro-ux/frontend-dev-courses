@@ -40,6 +40,8 @@ Any component rendered inside the dashboard layout can call `getContext('user')`
 
 ## Typed Context
 
+> **Tip:** Svelte also provides `createContext()` as a newer alternative to `setContext`/`getContext`. It returns a `[get, set]` pair and handles Symbol keys automatically: `const [getUser, setUser] = createContext<UserContext>()`. The manual `setContext`/`getContext` pattern shown here remains fully supported.
+
 Using string keys is fragile. A typo in the key silently returns `undefined`. Use a shared helper module to get type safety:
 
 ```typescript

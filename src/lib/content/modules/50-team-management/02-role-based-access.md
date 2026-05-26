@@ -103,6 +103,8 @@ This load function runs for every page under `/(app)/[teamSlug]/`. It verifies t
 
 ## Building the Permission Context
 
+> **Tip:** Svelte now provides `createContext()` as a newer alternative to `setContext`/`getContext`. It returns a `[get, set]` pair and handles Symbol keys automatically: `const [getPermissions, setPermissions] = createContext<PermissionContext>()`. The manual `setContext`/`getContext` pattern shown below remains fully supported.
+
 With the role available in layout data, set up a Svelte context that any child component can consume. Use a typed Symbol key to prevent collisions and ensure type safety:
 
 ```typescript

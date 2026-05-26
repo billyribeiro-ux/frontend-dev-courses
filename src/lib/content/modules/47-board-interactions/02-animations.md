@@ -2,7 +2,7 @@
 
 Moving a task card between columns should feel like sliding a physical card across a desk, not teleporting it. When a user drags a task from "To Do" to "In Progress," the card should fade out of one column and simultaneously appear in the other. When remaining cards shift to fill the gap, they should glide smoothly rather than jump. And when someone creates a new task, it should announce its arrival with a gentle entrance animation.
 
-Svelte provides purpose-built tools for each of these scenarios: `animate:flip` for reordering, `crossfade` for cross-container transitions, built-in transitions for enter/exit, and motion stores for continuous value interpolation. In this lesson you will wire them all into TeamBoard's Kanban board so every interaction feels polished and intentional.
+Svelte provides purpose-built tools for each of these scenarios: `animate:flip` for reordering, `crossfade` for cross-container transitions, built-in transitions for enter/exit, and motion classes for continuous value interpolation. In this lesson you will wire them all into TeamBoard's Kanban board so every interaction feels polished and intentional.
 
 ## animate:flip — Smooth Reordering Within Columns
 
@@ -334,13 +334,13 @@ Each transition serves a specific purpose:
 
 Notice that `in:fly` and `out:fade` use different transitions for enter and exit. This is intentional — the entrance should feel active and directional, while the exit should be quiet and unobtrusive.
 
-## tweened — Smooth Progress Bar
+## Tween — Smooth Progress Bar
 
 TeamBoard's board header shows a progress bar indicating what percentage of tasks are in the "Done" column. When a task moves, the bar should glide to its new value, not jump:
 
 ```svelte
 <script lang="ts">
-  import { tweened } from 'svelte/motion';
+  import { Tween } from 'svelte/motion';
   import { cubicOut } from 'svelte/easing';
 
   interface Props {
@@ -350,12 +350,12 @@ TeamBoard's board header shows a progress bar indicating what percentage of task
 
   let { totalTasks, doneTasks }: Props = $props();
 
-  const progress = tweened(0, {
+  const progress = new Tween(0, {
     duration: 600,
     easing: cubicOut
   });
 
-  // Update the tweened value whenever doneTasks or totalTasks changes
+  // Update the tween target whenever doneTasks or totalTasks changes
   $effect(() => {
     const pct = totalTasks > 0 ? (doneTasks / totalTasks) * 100 : 0;
     progress.set(pct);
@@ -366,15 +366,15 @@ TeamBoard's board header shows a progress bar indicating what percentage of task
   <div class="progress-bar">
     <div
       class="progress-fill"
-      style="width: {$progress}%"
+      style="width: {progress.current}%"
       role="progressbar"
-      aria-valuenow={Math.round($progress)}
+      aria-valuenow={Math.round(progress.current)}
       aria-valuemin={0}
       aria-valuemax={100}
     ></div>
   </div>
   <span class="progress-label">
-    {Math.round($progress)}% complete ({doneTasks}/{totalTasks} tasks)
+    {Math.round(progress.current)}% complete ({doneTasks}/{totalTasks} tasks)
   </span>
 </div>
 
@@ -397,7 +397,7 @@ TeamBoard's board header shows a progress bar indicating what percentage of task
     height: 100%;
     background: #22c55e;
     border-radius: 4px;
-    transition: none; /* The tweened store handles the animation */
+    transition: none; /* The Tween class handles the animation */
   }
 
   .progress-label {
@@ -408,22 +408,22 @@ TeamBoard's board header shows a progress bar indicating what percentage of task
 </style>
 ```
 
-Why use `tweened` instead of a CSS transition on the width? Two reasons. First, the displayed percentage text (`{Math.round($progress)}%`) also animates smoothly — it counts up/down in sync with the bar. You cannot do that with CSS alone. Second, `tweened` gives you full control over easing and duration from JavaScript, which means you can coordinate it with other animations happening simultaneously.
+Why use `Tween` instead of a CSS transition on the width? Two reasons. First, the displayed percentage text (`{Math.round(progress.current)}%`) also animates smoothly — it counts up/down in sync with the bar. You cannot do that with CSS alone. Second, `Tween` gives you full control over easing and duration from JavaScript, which means you can coordinate it with other animations happening simultaneously.
 
-The `$effect` watches for changes to `doneTasks` and `totalTasks` (both are reactive props) and calls `progress.set()` with the new percentage. The tweened store then smoothly interpolates from the current value to the new one over 600ms.
+The `$effect` watches for changes to `doneTasks` and `totalTasks` (both are reactive props) and calls `progress.set()` with the new percentage. The `Tween` instance then smoothly interpolates from the current value to the new one over 600ms, and `progress.current` updates reactively on each frame.
 
-## spring — Physics-Based Drag Preview
+## Spring — Physics-Based Drag Preview
 
-When a user drags a task card, a preview element should follow the cursor with a bouncy, physics-based feel. The `spring` store from `svelte/motion` provides exactly this — instead of following a fixed easing curve, it simulates a physical spring that overshoots and settles:
+When a user drags a task card, a preview element should follow the cursor with a bouncy, physics-based feel. The `Spring` class from `svelte/motion` provides exactly this — instead of following a fixed easing curve, it simulates a physical spring that overshoots and settles:
 
 ```svelte
 <script lang="ts">
-  import { spring } from 'svelte/motion';
+  import { Spring } from 'svelte/motion';
 
   let isDragging = $state(false);
   let dragData = $state<{ title: string } | null>(null);
 
-  const previewPosition = spring(
+  const previewPosition = new Spring(
     { x: 0, y: 0 },
     {
       stiffness: 0.15,
@@ -462,7 +462,7 @@ When a user drags a task card, a preview element should follow the cursor with a
 {#if isDragging && dragData}
   <div
     class="drag-preview"
-    style="left: {$previewPosition.x}px; top: {$previewPosition.y}px"
+    style="left: {previewPosition.current.x}px; top: {previewPosition.current.y}px"
   >
     {dragData.title}
   </div>
@@ -499,37 +499,24 @@ For a project management tool, you want something that feels responsive but prof
 
 ## Respecting prefers-reduced-motion
 
-Not everyone wants animations. Some users have vestibular disorders where motion triggers nausea or dizziness. Others simply find animations distracting. The `prefers-reduced-motion` media query lets you detect this system preference and respond appropriately:
+Not everyone wants animations. Some users have vestibular disorders where motion triggers nausea or dizziness. Others simply find animations distracting. The `prefers-reduced-motion` media query lets you detect this system preference and respond appropriately.
+
+Svelte provides a built-in `prefersReducedMotion` rune from `svelte/motion` that tracks the user's preference reactively:
 
 ```svelte
 <script lang="ts">
   import { fly, fade } from 'svelte/transition';
   import { flip } from 'svelte/animate';
-  import { tweened } from 'svelte/motion';
+  import { Tween, prefersReducedMotion } from 'svelte/motion';
   import { cubicOut } from 'svelte/easing';
 
-  let reducedMotion = $state(false);
-
-  // Detect the system preference reactively
-  $effect(() => {
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-    reducedMotion = mq.matches;
-
-    function onChange(event: MediaQueryListEvent) {
-      reducedMotion = event.matches;
-    }
-
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  });
-
   // Derive safe animation durations
-  let flipDuration = $derived(reducedMotion ? 0 : 300);
-  let transitionDuration = $derived(reducedMotion ? 0 : 400);
+  let flipDuration = $derived(prefersReducedMotion.current ? 0 : 300);
+  let transitionDuration = $derived(prefersReducedMotion.current ? 0 : 400);
 
-  // Even the tweened store respects the preference
-  const progress = tweened(0, {
-    duration: reducedMotion ? 0 : 600,
+  // Even the Tween instance respects the preference
+  const progress = new Tween(0, {
+    duration: prefersReducedMotion.current ? 0 : 600,
     easing: cubicOut
   });
 </script>
@@ -537,28 +524,16 @@ Not everyone wants animations. Some users have vestibular disorders where motion
 
 Setting `duration: 0` effectively disables the animation — the element still enters/exits the DOM, but the visual transition is instant. This is better than conditionally removing the `transition:` directive because it keeps your template logic simple.
 
-You can extract this into a reusable utility:
+You can extract this into a reusable utility that wraps the built-in `prefersReducedMotion`:
 
 ```typescript
 // src/lib/state/motion.svelte.ts
+import { prefersReducedMotion } from 'svelte/motion';
+
 export function createMotionPreference() {
-  let reducedMotion = $state(false);
-
-  $effect(() => {
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-    reducedMotion = mq.matches;
-
-    function onChange(event: MediaQueryListEvent) {
-      reducedMotion = event.matches;
-    }
-
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  });
-
   return {
-    get reduced() { return reducedMotion; },
-    duration(ms: number) { return reducedMotion ? 0 : ms; }
+    get reduced() { return prefersReducedMotion.current; },
+    duration(ms: number) { return prefersReducedMotion.current ? 0 : ms; }
   };
 }
 ```
@@ -917,7 +892,7 @@ Build an animated notification toast system for TeamBoard:
 2. New toasts should fly in from the right with `in:fly={{ x: 300, duration: 300 }}`.
 3. Dismissed toasts should fade out with `out:fade={{ duration: 200 }}`.
 4. When a toast is dismissed and removed from the middle of the list, remaining toasts should smoothly slide to fill the gap using `animate:flip`.
-5. Add a tweened progress bar on each toast that counts down from 100% to 0% over the toast's duration (e.g., 5 seconds), then auto-dismisses.
+5. Add a `Tween` progress bar on each toast that counts down from 100% to 0% over the toast's duration (e.g., 5 seconds), then auto-dismisses.
 6. Wrap all animation durations with a `prefers-reduced-motion` check using the `createMotionPreference` utility from this lesson.
 
 ## Key Takeaways
@@ -925,7 +900,7 @@ Build an animated notification toast system for TeamBoard:
 - `animate:flip` from `svelte/animate` smoothly animates elements to new positions when a keyed `{#each}` block reorders — it requires a key expression like `(item.id)`
 - `crossfade` from `svelte/transition` creates matched `send`/`receive` transitions for elements moving between different `{#each}` blocks — the pair must be created once and shared across all containers
 - Use `in:fly` for directional entrances, `out:fade` for quiet exits, and `transition:slide` for expand/collapse — mixing different enter and exit transitions gives each action a distinct visual character
-- `tweened` from `svelte/motion` smoothly interpolates numeric values over time — ideal for progress bars and counters where both the visual and the displayed number should animate
-- `spring` from `svelte/motion` uses physics simulation with `stiffness` and `damping` — perfect for drag previews that should feel tactile and responsive
-- Always respect `prefers-reduced-motion` by checking `window.matchMedia` and setting animation durations to 0 — extract this into a reusable utility so every component stays consistent
+- `Tween` from `svelte/motion` smoothly interpolates numeric values over time — ideal for progress bars and counters where both the visual and the displayed number should animate; access the interpolated value via `.current`
+- `Spring` from `svelte/motion` uses physics simulation with `stiffness` and `damping` — perfect for drag previews that should feel tactile and responsive; access the interpolated value via `.current`
+- Always respect `prefers-reduced-motion` by using the built-in `prefersReducedMotion` from `svelte/motion` and setting animation durations to 0 — extract this into a reusable utility so every component stays consistent
 - Create the crossfade pair in the parent component and pass `send`/`receive` as props to child components — they must share the same instance to coordinate animations across containers

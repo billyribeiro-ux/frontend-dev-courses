@@ -185,6 +185,64 @@ export const getWeather = query(CitySchema, async ({ city }) => {
 
 Without batching, four components fetching weather data would make four separate round trips. With `query.batch`, they share a single request.
 
+## Live Queries
+
+`query.live` enables real-time data streaming from server to client. Instead of returning a single result, the server function uses an async generator to yield values over time, and the client receives each update reactively:
+
+```typescript
+// src/lib/api/notifications.remote.ts
+import { query } from '$app/server';
+import { db } from '$lib/server/database';
+
+export const getNotifications = query.live(async function* (userId: string) {
+  while (true) {
+    const notifications = await db
+      .select()
+      .from(notificationsTable)
+      .where(eq(notificationsTable.userId, userId))
+      .orderBy(desc(notificationsTable.createdAt))
+      .limit(20);
+
+    yield notifications;
+
+    // Wait before checking for new data
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+});
+```
+
+On the client side, the returned object updates automatically as the server yields new values:
+
+```svelte
+<script lang="ts">
+  import { getNotifications } from '$lib/api/notifications.remote';
+  import { userId } from '$lib/auth';
+
+  const notifications = getNotifications(userId);
+</script>
+
+{#if notifications.connected}
+  <span class="status">Live</span>
+{:else}
+  <span class="status">Disconnected</span>
+  <button onclick={() => notifications.reconnect()}>Reconnect</button>
+{/if}
+
+{#each notifications.current ?? [] as note}
+  <div class="notification">
+    <p>{note.message}</p>
+    <time>{note.createdAt}</time>
+  </div>
+{/each}
+```
+
+The object returned by `query.live` includes two properties for connection management:
+
+- **`.connected`** — a reactive boolean that is `true` while the streaming connection is active
+- **`.reconnect()`** — re-establishes the connection after a disconnection or network interruption
+
+Live queries are useful for real-time dashboards, notification feeds, collaborative editing indicators, and any feature where the UI must reflect server-side changes as they happen. Because the server controls the yield frequency, you can tune how often updates are pushed without changing client code.
+
 ## Caching Behavior
 
 Queries are deduplicated within a single page render. If two components on the same page call `getProducts()` with the same arguments, they receive the same object — not two separate server requests. This means you can call query functions freely without worrying about redundant fetches.
@@ -201,4 +259,5 @@ Create a `.remote.ts` file that exports two query functions: `getCategories` (no
 - Always validate arguments with a Zod or Valibot schema — remote functions are public HTTP endpoints
 - `.refresh()` re-fetches data; `.loading`, `.error`, and `.current` provide reactive UI state
 - `query.batch` combines multiple simultaneous queries into a single HTTP request
+- `query.live` streams real-time data using async generators; the returned object exposes `.connected` and `.reconnect()` for connection management
 - Identical queries on the same page are deduplicated automatically

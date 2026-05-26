@@ -994,7 +994,7 @@ npx playwright show-report
 - `$state.snapshot()` returns plain objects that are disconnected from reactive state — test this property explicitly to verify serialization safety
 - Actions are tested by creating real DOM elements, simulating pointer/mouse events, and asserting on DOM changes and dispatched custom events
 - `@testing-library/svelte` renders real Svelte components and encourages testing from the user's perspective — query by role, label, and text, not by CSS class
-- Components that depend on context need a test wrapper that calls `setContext` before rendering the component under test
+- Components that depend on context need a test wrapper that calls `setContext` before rendering the component under test. Note that Svelte now also offers `createContext()` from `svelte`, which returns a `[get, set]` pair and handles Symbol keys automatically — if your production code uses `createContext()`, your test wrapper should call the returned `set` function instead of `setContext`
 - Remote functions are tested by mocking the database layer and verifying the function logic, validation, and data transformations
 - Playwright E2E tests use the page object pattern to encapsulate selectors and actions, making tests readable and maintainable
 - Run unit tests on every save (watch mode), component tests before merging, and E2E tests before deploying

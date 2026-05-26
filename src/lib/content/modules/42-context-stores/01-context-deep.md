@@ -79,6 +79,57 @@ export function getThemeContext(): ThemeConfig {
 
 Symbols are globally unique, so collisions are impossible even across third-party libraries.
 
+## createContext — The Modern Approach
+
+Svelte 5 introduced `createContext()` as the preferred way to create typed, scoped context. Instead of manually defining Symbol keys and writing `get`/`set` wrapper functions yourself, `createContext` does it all in one call. It may still be marked as experimental in some versions, so check the docs for your Svelte release.
+
+`createContext()` returns a `[get, set]` pair of functions — no Symbol key to manage, no boilerplate:
+
+```typescript
+// src/lib/context/theme.ts
+import { createContext } from 'svelte';
+
+interface ThemeConfig {
+  mode: 'light' | 'dark';
+  accentColor: string;
+  fontSize: 'sm' | 'md' | 'lg';
+}
+
+const [getThemeContext, setThemeContext] = createContext<ThemeConfig>();
+
+export { getThemeContext, setThemeContext };
+```
+
+Compare this with the manual Symbol approach in the previous section — the interface stays the same, but the Symbol key, the `setContext`/`getContext` wrappers, and the explicit type annotations on `getContext` are all gone. `createContext` handles the unique key internally, making collisions impossible without any effort on your part.
+
+Usage in components is identical to the typed helper pattern:
+
+```svelte
+<!-- Parent layout -->
+<script lang="ts">
+  import { setThemeContext } from '$lib/context/theme';
+
+  setThemeContext({ mode: 'dark', accentColor: '#7c3aed', fontSize: 'md' });
+</script>
+
+{@render children()}
+```
+
+```svelte
+<!-- Deeply nested child -->
+<script lang="ts">
+  import { getThemeContext } from '$lib/context/theme';
+
+  const theme = getThemeContext(); // Fully typed — ThemeConfig is inferred
+</script>
+
+<div class="accent" style:color={theme.accentColor}>
+  Current font size: {theme.fontSize}
+</div>
+```
+
+The `setContext` and `getContext` functions are not deprecated and still work exactly as before. If you have existing code that uses Symbol keys and typed helpers, there is no need to rewrite it. However, for new code `createContext` is cleaner: fewer lines, no manual key management, and the same type safety you would get from hand-rolled helpers.
+
 ## hasContext and getAllContexts
 
 `hasContext(key)` checks whether a context value exists without throwing. This is useful for optional dependencies — components that adapt their behavior based on whether a parent has provided context:
@@ -171,6 +222,8 @@ Build a `Tabs` component system using context. The parent `Tabs` component shoul
 
 - `setContext(key, value)` provides data from a parent; `getContext(key)` reads it in any descendant
 - Use `Symbol` keys with typed helper functions to prevent collisions and ensure type safety
+- `createContext()` is the preferred approach for new code — it returns a typed `[get, set]` pair with no manual key management
+- `setContext`/`getContext` still work and are not deprecated, but `createContext` eliminates boilerplate and avoids key collisions automatically
 - `hasContext(key)` checks if context exists, enabling components with optional dependencies
 - `getAllContexts()` returns all ancestor context as a Map, useful for wrapper components
 - Pass objects with `$state` and getters to make context values reactive

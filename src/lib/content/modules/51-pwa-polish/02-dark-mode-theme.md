@@ -24,7 +24,9 @@ Here is the raw approach using `<svelte:window>`:
 />
 ```
 
-That will not work. `<svelte:window>` can bind to properties like `innerWidth` and `online`, but it does not have built-in support for media queries. Instead, you set up `matchMedia` listeners inside an `$effect` that runs when the component mounts:
+That will not work. `<svelte:window>` can bind to properties like `innerWidth` and `online`, but it does not have built-in support for media queries. Instead, you set up `matchMedia` listeners inside an `$effect` that runs when the component mounts.
+
+> **Modern alternative:** Svelte provides `MediaQuery` from `svelte/reactivity` as a built-in reactive wrapper around `window.matchMedia()`. Instead of manually setting up `$effect` listeners and cleanup, you can write: `const prefersDark = new MediaQuery('(prefers-color-scheme: dark)')` and `const reducedMotion = new MediaQuery('(prefers-reduced-motion: reduce)')`, then read `.current` for the live boolean value. The manual approach shown below is still valid and gives you full control over the listener lifecycle.
 
 ```svelte
 <script lang="ts">
@@ -61,6 +63,8 @@ That will not work. `<svelte:window>` can bind to properties like `innerWidth` a
 The `$effect` return function cleans up the listeners when the component is destroyed, just like the cleanup function in `onMount`. The `systemPrefersDark` and `systemPrefersReducedMotion` variables are reactive — any component that reads them will re-render when the system preference changes.
 
 ## The ThemeContext
+
+> **Tip:** Svelte now provides `createContext()` as a newer alternative to `setContext`/`getContext`. It returns a `[get, set]` pair and handles Symbol keys automatically, reducing the boilerplate of manually creating Symbol keys and typed wrapper functions. The `setContext`/`getContext` pattern shown below remains fully supported.
 
 In Module 46 you learned about using `setContext` and `getContext` to share state across a component tree without prop drilling. The theme system is a perfect use case. You set it once in the root layout and every component in the tree can read it.
 

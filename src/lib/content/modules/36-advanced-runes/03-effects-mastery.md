@@ -329,12 +329,72 @@ Build a "Live Markdown Preview" component:
 - Track the window width with an effect and event listener cleanup pattern, and switch to a stacked layout below 768px
 - Use `untrack()` to read and update a "last saved" timestamp without creating a dependency loop
 
+## $effect.pending — Tracking Unresolved Async Operations
+
+`$effect.pending()` returns the number of unresolved async operations within the current `{#await}` boundary. Instead of tracking individual promises one by one, it gives you a single count of everything that is still loading — making it ideal for building unified loading indicators.
+
+```svelte
+<script>
+  let userPromise = $state(fetchUser());
+  let postsPromise = $state(fetchPosts());
+  let commentsPromise = $state(fetchComments());
+
+  async function fetchUser() {
+    const res = await fetch("/api/user");
+    return res.json();
+  }
+
+  async function fetchPosts() {
+    const res = await fetch("/api/posts");
+    return res.json();
+  }
+
+  async function fetchComments() {
+    const res = await fetch("/api/comments");
+    return res.json();
+  }
+
+  function refreshAll() {
+    userPromise = fetchUser();
+    postsPromise = fetchPosts();
+    commentsPromise = fetchComments();
+  }
+</script>
+
+{#if $effect.pending()}
+  <div class="loading-bar">
+    Loading... ({$effect.pending()} pending)
+  </div>
+{/if}
+
+{#await userPromise then user}
+  <h1>{user.name}</h1>
+{/await}
+
+{#await postsPromise then posts}
+  <ul>
+    {#each posts as post}
+      <li>{post.title}</li>
+    {/each}
+  </ul>
+{/await}
+
+{#await commentsPromise then comments}
+  <p>{comments.length} comments</p>
+{/await}
+
+<button onclick={refreshAll}>Refresh All</button>
+```
+
+In this example, `$effect.pending()` returns `3` when all three fetches are in flight, `2` when one has resolved, and so on down to `0`. This lets you build a single global loading indicator that automatically reflects the true loading state without manually combining boolean flags.
+
 ## Key Takeaways
 
 - `$effect()` runs after mount and after reactive dependencies change, with automatic cleanup on component destroy
 - `$effect.pre()` runs before DOM updates — use it to measure or preserve DOM state
 - `$effect.tracking()` checks if code is running in a tracking context — useful for conditional subscriptions
 - `$effect.root()` creates standalone effect scopes that must be manually cleaned up
+- `$effect.pending()` returns the count of unresolved async operations in the current `{#await}` boundary — useful for unified loading indicators
 - `untrack()` reads a reactive value without adding it as a dependency — essential for avoiding infinite loops
 - `tick()` waits for pending DOM updates; `flushSync()` forces immediate synchronous DOM updates
 - Always return a cleanup function when your effect sets up listeners, intervals, or subscriptions

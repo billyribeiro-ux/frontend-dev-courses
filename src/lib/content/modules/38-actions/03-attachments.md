@@ -118,6 +118,127 @@ Because the attachment reads `text` implicitly through the bound value, it re-ru
 
 Use actions when you want a reusable behavior you can share across components. Use attachments when you need quick, reactive DOM access that is specific to a single element in a single component.
 
+## Creating Attachment Keys with createAttachmentKey()
+
+Starting in Svelte 5.29, you can use `createAttachmentKey()` to create a unique symbol key that lets you programmatically spread attachments onto elements. This is useful when a component wants to declaratively add attachments to elements via props or context, rather than requiring consumers to manually apply `{@attach}` directives.
+
+```svelte
+<!-- Tooltip.svelte -->
+<script lang="ts" module>
+  import { createAttachmentKey } from 'svelte';
+
+  // Create a unique key that represents this attachment
+  export const tooltipKey = createAttachmentKey();
+</script>
+
+<script lang="ts">
+  import { setContext } from 'svelte';
+
+  let { children } = $props();
+
+  // Provide an attachment via context using the key
+  setContext(tooltipKey, (node: HTMLElement) => {
+    let tip: HTMLDivElement | null = null;
+
+    function show() {
+      tip = document.createElement('div');
+      tip.className = 'tooltip';
+      tip.textContent = node.getAttribute('aria-label') ?? '';
+      node.appendChild(tip);
+    }
+
+    function hide() {
+      tip?.remove();
+    }
+
+    node.addEventListener('mouseenter', show);
+    node.addEventListener('mouseleave', hide);
+
+    return () => {
+      node.removeEventListener('mouseenter', show);
+      node.removeEventListener('mouseleave', hide);
+      tip?.remove();
+    };
+  });
+</script>
+
+{@render children()}
+```
+
+A consumer can then apply the attachment by spreading the key onto any element:
+
+```svelte
+<script lang="ts">
+  import Tooltip, { tooltipKey } from './Tooltip.svelte';
+  import { getContext } from 'svelte';
+
+  const tooltip = getContext(tooltipKey);
+</script>
+
+<Tooltip>
+  <button {...{ [tooltipKey]: true }} aria-label="Save your work">
+    Save
+  </button>
+</Tooltip>
+```
+
+The key advantage of `createAttachmentKey()` is that it enables library authors to provide attachment behaviors without requiring the consumer to write `{@attach}` directives directly. The attachment is declaratively applied through the component tree.
+
+## Converting Actions to Attachments with fromAction()
+
+If you have existing Svelte actions (functions designed for the `use:` directive) and want to use them as attachments, `fromAction()` provides a direct conversion path. This is especially valuable for library authors who already ship action-based APIs and want to support the attachment model without rewriting everything from scratch.
+
+```svelte
+<script lang="ts">
+  import { fromAction } from 'svelte';
+  import { clickOutside } from './actions.js';
+
+  let showDropdown = $state(false);
+
+  // Convert the existing action into an attachment
+  const clickOutsideAttachment = fromAction(clickOutside);
+</script>
+
+<button onclick={() => showDropdown = !showDropdown}>Toggle Menu</button>
+
+{#if showDropdown}
+  <div {@attach clickOutsideAttachment(() => {
+    showDropdown = false;
+  })}>
+    <ul>
+      <li>Option A</li>
+      <li>Option B</li>
+      <li>Option C</li>
+    </ul>
+  </div>
+{/if}
+```
+
+In this example, `clickOutside` is a traditional action that accepts a callback parameter. `fromAction()` wraps it so it conforms to the attachment interface: it receives the DOM node, passes through the parameter, and handles cleanup automatically.
+
+The original action module stays unchanged:
+
+```ts
+// actions.ts
+export function clickOutside(node: HTMLElement, callback: () => void) {
+  function handleClick(event: MouseEvent) {
+    if (!node.contains(event.target as Node)) {
+      callback();
+    }
+  }
+
+  document.addEventListener('click', handleClick, true);
+
+  return {
+    destroy() {
+      document.removeEventListener('click', handleClick, true);
+    }
+  };
+}
+```
+
+`fromAction()` bridges the gap between the action API (`destroy` / `update`) and the attachment API (cleanup functions and automatic reactivity). Use it when migrating existing libraries or when you want to mix actions and attachments in the same codebase.
+
 ## Try It
 
 Create a component with an `<input>` and a `<div>`. Use an attachment on the `<div>` that reads the input's bound value and sets the div's `textContent` and adjusts the background color based on the text length (short = green, medium = yellow, long = red). Verify that the attachment re-runs reactively as you type.
@@ -130,3 +251,5 @@ Create a component with an `<input>` and a `<div>`. Use an attachment on the `<d
 - Actions are better for reusable, shareable DOM behaviors exported from separate files
 - Attachments are better for one-off, inline DOM manipulation tightly coupled to component state
 - Attachments follow the same cleanup pattern as `$effect` — return a function, not an object
+- `createAttachmentKey()` (Svelte 5.29+) creates a unique symbol key for spreading attachments onto elements programmatically via props or context
+- `fromAction()` converts existing `use:` directive actions into attachments, providing a migration path for libraries with action-based APIs

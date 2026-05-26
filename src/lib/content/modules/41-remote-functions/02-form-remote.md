@@ -191,6 +191,206 @@ export const register = form(
 
 After a failed submission, the email field repopulates with the user's input, but the password fields remain empty.
 
+## Isolated Form Instances with form.for
+
+When rendering repeated elements that each need their own form — like a list of todo items with inline editing — use `form.for(id)` to create isolated instances. Each instance tracks its own field values, validation state, and submission independently:
+
+```typescript
+// src/lib/api/todos.remote.ts
+import { form } from '$app/server';
+import * as v from 'valibot';
+import { db } from '$lib/server/database';
+
+export const updateTodo = form(
+  v.object({
+    id: v.string(),
+    text: v.pipe(v.string(), v.minLength(1, 'Cannot be empty')),
+    completed: v.boolean()
+  }),
+  async (data) => {
+    await db
+      .update(todosTable)
+      .set({ text: data.text, completed: data.completed })
+      .where(eq(todosTable.id, data.id));
+  }
+);
+```
+
+```svelte
+<script lang="ts">
+  import { updateTodo } from '$lib/api/todos.remote';
+
+  let { todos } = $props();
+</script>
+
+{#each todos as todo}
+  {@const todoForm = updateTodo.for(todo.id)}
+
+  <form {...todoForm}>
+    <input type="hidden" name="id" value={todo.id} />
+    <input {...todoForm.fields.text.as('text')} />
+
+    {#each todoForm.fields.text.issues() as issue}
+      <p class="error">{issue}</p>
+    {/each}
+
+    <label>
+      <input
+        type="checkbox"
+        checked={todo.completed}
+        onchange={() => todoForm.fields.completed.set(!todo.completed)}
+      />
+      Done
+    </label>
+
+    <button type="submit">Save</button>
+  </form>
+{/each}
+```
+
+Without `form.for`, every item would share the same form state — submitting one would affect all others. The `id` argument creates a unique instance per item, so each todo has independent validation errors, field values, and submission state.
+
+## Programmatic Validation with form.validate
+
+Sometimes you need to validate a form without submitting it — for example, to check fields on blur or before enabling a submit button. The `.validate()` method triggers validation and populates `.issues()` without making a server request:
+
+```svelte
+<script lang="ts">
+  import { createPost } from '$lib/api/posts.remote';
+
+  const postForm = createPost.preflight(
+    v.object({
+      title: v.pipe(v.string(), v.minLength(3, 'Title too short')),
+      body: v.pipe(v.string(), v.minLength(10, 'Body too short')),
+      category: v.string()
+    })
+  );
+
+  let isValid = $state(false);
+
+  async function checkValidity() {
+    const result = await postForm.validate();
+    isValid = result.valid;
+  }
+</script>
+
+<form {...postForm}>
+  <label>
+    Title
+    <input {...postForm.fields.title.as('text')} onblur={checkValidity} />
+  </label>
+  {#each postForm.fields.title.issues() as issue}
+    <p class="error">{issue}</p>
+  {/each}
+
+  <label>
+    Body
+    <textarea {...postForm.fields.body.as('textarea')} onblur={checkValidity}></textarea>
+  </label>
+  {#each postForm.fields.body.issues() as issue}
+    <p class="error">{issue}</p>
+  {/each}
+
+  <button type="submit" disabled={!isValid}>Publish</button>
+</form>
+```
+
+`.validate()` returns a promise that resolves with `{ valid: boolean }`. It runs the preflight schema against current field values and updates each field's `.issues()` array. This is useful for multi-step wizards where you validate the current step before advancing, or for showing a "form ready" indicator.
+
+## Optimistic Updates with withOverride
+
+When a mutation succeeds, you often want the UI to update immediately without waiting for a query refresh. `withOverride` lets you optimistically apply new data to a query's `.current` value during a form submission:
+
+```svelte
+<script lang="ts">
+  import { getProducts } from '$lib/api/products.remote';
+  import { updateProduct } from '$lib/api/products.remote';
+
+  const products = getProducts();
+</script>
+
+<form
+  {...updateProduct}
+  use:updateProduct.enhance(() => {
+    // Optimistically update the product list while the server processes the mutation
+    const rollback = products.withOverride(
+      products.current?.map((p) =>
+        p.id === editingId ? { ...p, ...pendingChanges } : p
+      ) ?? []
+    );
+
+    return async ({ result }) => {
+      if (result.type === 'success') {
+        // Refresh with real server data and remove the override
+        await products.refresh();
+        rollback();
+      } else {
+        // Revert the optimistic update on failure
+        rollback();
+      }
+    };
+  }}
+>
+  <!-- form fields -->
+</form>
+```
+
+`withOverride` immediately replaces the query's `.current` value with the data you provide. It returns a `rollback` function that restores the original data. The pattern is:
+
+1. Apply the override with optimistic data before the server responds
+2. On success, refresh the query to get confirmed server data and call `rollback` to remove the override
+3. On failure, call `rollback` to revert to the previous state
+
+This keeps the UI responsive — users see their changes instantly while the server processes them in the background.
+
+## Client-Requested Query Refresh with requested
+
+After a form submission, you may want the server to decide which queries should refresh. The `requested()` function lets the server accept refresh requests from the client, giving server-side control over post-mutation data fetching:
+
+```typescript
+// src/lib/api/products.remote.ts
+import { query, form, requested } from '$app/server';
+import { db } from '$lib/server/database';
+
+export const getProducts = query(async () => {
+  return await db.select().from(productsTable);
+});
+
+export const deleteProduct = form(
+  v.object({ id: v.string() }),
+  async (data) => {
+    await db.delete(productsTable).where(eq(productsTable.id, data.id));
+
+    // Accept the client's request to refresh the products query
+    await requested(getProducts);
+  }
+);
+```
+
+```svelte
+<script lang="ts">
+  import { getProducts, deleteProduct } from '$lib/api/products.remote';
+
+  const products = getProducts();
+</script>
+
+<form
+  {...deleteProduct}
+  use:deleteProduct.enhance(() => {
+    return async ({ result }) => {
+      if (result.type === 'success') {
+        // This refresh is fulfilled by the requested() call on the server
+        await products.refresh();
+      }
+    };
+  }}
+>
+  <!-- delete button -->
+</form>
+```
+
+When the client calls `products.refresh()` after a successful mutation, and the server handler includes `await requested(getProducts)`, the server bundles the fresh query result into the mutation response. This avoids an extra round-trip — the client gets updated data as part of the form submission response rather than making a separate request.
+
 ## Server-Side Validation Errors with invalid
 
 For validation that requires server context (like checking if an email is already taken), use `invalid` from `@sveltejs/kit`:
@@ -246,4 +446,8 @@ Create a user registration form using `form()` with a Valibot schema. Include an
 - `.preflight` adds instant client-side validation before the server round-trip
 - Fields prefixed with `_` are sensitive and will not be repopulated after failed submissions
 - Use `invalid()` from `@sveltejs/kit` for server-side validation errors that need database access
+- `form.for(id)` creates isolated form instances for repeated elements like list items, each with independent state
+- `.validate()` triggers validation without submitting, useful for on-blur checks and multi-step forms
+- `withOverride` on a query enables optimistic updates during mutations; it returns a `rollback` function to revert on failure
+- `requested()` lets the server accept client-requested query refreshes, bundling fresh data into the mutation response
 - Choose `form()` for reusable, component-level forms; use traditional actions for simple, route-bound forms

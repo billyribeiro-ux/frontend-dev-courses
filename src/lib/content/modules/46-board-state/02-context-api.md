@@ -37,6 +37,8 @@ BoardLayout
 
 ## Board Context with Typed Symbol Keys
 
+> **Tip:** Svelte now provides `createContext()` as a newer alternative to `setContext`/`getContext`. It returns a `[get, set]` pair and handles Symbol keys automatically, reducing boilerplate. For example: `const [getBoard, setBoard] = createContext<BoardState>()`. The `setContext`/`getContext` pattern shown below remains fully supported.
+
 String keys are fragile — a typo returns `undefined` silently, and two libraries could collide on the same string. Symbol keys are unique by definition. Wrapping them in typed helper functions gives you compile-time safety:
 
 ```typescript

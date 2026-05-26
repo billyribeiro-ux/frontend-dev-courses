@@ -142,6 +142,63 @@ function hasChanged() {
 }
 ```
 
+## $state.eager() — Forcing Synchronous Updates
+
+By default, Svelte batches state changes and applies them to the DOM asynchronously. This is great for performance — if you update three variables in a row, Svelte groups them into a single DOM update instead of three. But occasionally you need the DOM to reflect a state change **immediately**, before the next line of code runs. That is what `$state.eager()` is for.
+
+`$state.eager(value)` creates reactive state that forces a synchronous UI update every time it changes, bypassing Svelte's batching:
+
+```svelte
+<script>
+  let status = $state.eager("idle");
+  let resultBox;
+
+  async function runProcess() {
+    // The DOM updates IMMEDIATELY after this assignment
+    status = "loading";
+
+    // Because status is eager, the UI already shows "loading"
+    // before we start the fetch
+    const response = await fetch("/api/slow-endpoint");
+    const data = await response.json();
+
+    // The DOM updates again immediately
+    status = "done";
+  }
+</script>
+
+<p class={status}>Status: {status}</p>
+<button onclick={runProcess} disabled={status === "loading"}>
+  Start
+</button>
+```
+
+With regular `$state("idle")`, the assignment `status = "loading"` would be batched. If the `await` on the next line resolves very quickly (or if you need to measure the DOM between assignments), the user might never see the "loading" state. `$state.eager()` guarantees each assignment is flushed to the DOM before execution continues.
+
+This is especially useful when state interacts with `await` expressions or when you need to read the DOM (measure dimensions, check positions) between state changes:
+
+```svelte
+<script>
+  let expanded = $state.eager(false);
+  let panel;
+
+  async function toggleAndMeasure() {
+    expanded = !expanded;
+    // DOM is already updated — safe to measure
+    console.log("Panel height:", panel?.offsetHeight);
+  }
+</script>
+
+<div bind:this={panel} class:expanded>
+  {#if expanded}
+    <p>Expanded content here</p>
+  {/if}
+</div>
+<button onclick={toggleAndMeasure}>Toggle</button>
+```
+
+**Use `$state.eager()` sparingly.** The default batched behavior exists because it is significantly better for performance — collapsing multiple state changes into a single render pass. Only reach for `$state.eager()` when you have a specific reason to need synchronous DOM updates, such as coordinating with `await` or measuring the DOM between state changes.
+
 ## When to Use Each: Decision Guide
 
 | Scenario | Use | Why |
@@ -336,5 +393,6 @@ Build a "Contact Manager" that uses all three state variants:
 - `$state()` creates a **deep reactive proxy** — mutating any nested property triggers UI updates automatically
 - `$state.raw()` creates state that only reacts to **reassignment**, not mutation — better performance for large or read-only data
 - `$state.snapshot()` returns a **plain JavaScript object** from a proxy — essential for serialization, logging, and external libraries
+- `$state.eager()` forces **synchronous DOM updates** on every change — use it when coordinating with `await` or measuring the DOM between state changes, but sparingly since batching is better for performance
 - Start with `$state()` for most interactive data; switch to `$state.raw()` when performance matters and you do not need deep mutation
 - Use `$state.snapshot()` whenever reactive data crosses the boundary out of Svelte (localStorage, fetch, console, third-party libraries)

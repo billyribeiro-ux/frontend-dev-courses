@@ -185,6 +185,8 @@ $effect(() => {
 
 This is a professional requirement — many users rely on this setting, and ignoring it creates an inaccessible experience.
 
+> **Tip:** Svelte 5.7+ provides built-in reactive alternatives for detecting motion preferences. You can use `prefersReducedMotion` from `svelte/motion` (a reactive boolean) or `new MediaQuery('(prefers-reduced-motion: reduce)')` from `svelte/reactivity` for a general-purpose reactive media query. These stay in sync automatically if the user changes their OS setting while the page is open.
+
 ## Animating Component Entrance
 
 A reusable pattern for animating any component as it enters the viewport:

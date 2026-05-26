@@ -2,7 +2,7 @@
 
 A dashboard that makes you wait for everything before showing anything is a bad dashboard. The user's name, team, and recent tasks can load in milliseconds from the database. But analytics — aggregations across thousands of tasks, burndown calculations, heatmap data — take real time to compute. Making the user stare at a blank screen while the slowest query finishes is a waste of the fast data that is already ready.
 
-SvelteKit's streaming pattern solves this elegantly. You `await` the fast data in your load function (it blocks the page from rendering until it is ready) and return the slow data as unresolved promises. The page renders immediately with the fast data, and each analytics section loads independently as its promise resolves. Combine this with Svelte's `tweened` motion for animated numbers, `$derived.by()` for trend calculations, and `{@const}` for inline formatting, and you get a dashboard that feels fast, looks polished, and computes everything reactively.
+SvelteKit's streaming pattern solves this elegantly. You `await` the fast data in your load function (it blocks the page from rendering until it is ready) and return the slow data as unresolved promises. The page renders immediately with the fast data, and each analytics section loads independently as its promise resolves. Combine this with Svelte's `Tween` motion for animated numbers, `$derived.by()` for trend calculations, and `{@const}` for inline formatting, and you get a dashboard that feels fast, looks polished, and computes everything reactively.
 
 ## The Streaming Load Function
 
@@ -160,7 +160,7 @@ The page renders immediately with the fast data and shows skeleton placeholders 
 <!-- src/routes/(app)/dashboard/+page.svelte -->
 <script lang="ts">
   import type { PageData } from './$types';
-  import { tweened } from 'svelte/motion';
+  import { Tween } from 'svelte/motion';
   import { cubicOut } from 'svelte/easing';
   import AnalyticsCard from '$components/ui/AnalyticsCard.svelte';
   import BurndownChart from '$components/ui/BurndownChart.svelte';
@@ -168,18 +168,18 @@ The page renders immediately with the fast data and shows skeleton placeholders 
 
   let { data }: { data: PageData } = $props();
 
-  // Tweened values for animated number counting
-  const completedCount = tweened(0, {
+  // Tween instances for animated number counting
+  const completedCount = new Tween(0, {
     duration: 800,
     easing: cubicOut
   });
 
-  const velocityScore = tweened(0, {
+  const velocityScore = new Tween(0, {
     duration: 1000,
     easing: cubicOut
   });
 
-  const completionRate = tweened(0, {
+  const completionRate = new Tween(0, {
     duration: 900,
     easing: cubicOut,
     // Custom interpolator for one decimal place
@@ -187,7 +187,7 @@ The page renders immediately with the fast data and shows skeleton placeholders 
       Math.round((from + (to - from) * t) * 10) / 10
   });
 
-  const cycleTime = tweened(0, {
+  const cycleTime = new Tween(0, {
     duration: 700,
     easing: cubicOut,
     interpolate: (from, to) => (t) =>
@@ -275,25 +275,25 @@ The page renders immediately with the fast data and shows skeleton placeholders 
         {#each [
           {
             label: 'Tasks Completed',
-            value: $completedCount,
+            value: completedCount.current,
             format: 'integer',
             trend: weeklyChange
           },
           {
             label: 'Velocity Score',
-            value: $velocityScore,
+            value: velocityScore.current,
             format: 'decimal',
             trend: null
           },
           {
             label: 'Completion Rate',
-            value: $completionRate,
+            value: completionRate.current,
             format: 'percentage',
             trend: null
           },
           {
             label: 'Avg Cycle Time',
-            value: $cycleTime,
+            value: cycleTime.current,
             format: 'duration',
             trend: null
           }
@@ -689,15 +689,15 @@ The page renders immediately with the fast data and shows skeleton placeholders 
 
 There is a lot happening on this page, so let us break down the key patterns.
 
-## Tweened Values for Animated Numbers
+## Tween Instances for Animated Numbers
 
-When analytics data arrives, you do not want the numbers to just appear — you want them to count up from zero, giving the user a sense of magnitude and drawing attention to the freshly loaded data. The `tweened` function from `svelte/motion` creates a value that animates smoothly toward a target over a specified duration:
+When analytics data arrives, you do not want the numbers to just appear — you want them to count up from zero, giving the user a sense of magnitude and drawing attention to the freshly loaded data. The `Tween` class from `svelte/motion` creates a value that animates smoothly toward a target over a specified duration:
 
 ```typescript
-import { tweened } from 'svelte/motion';
+import { Tween } from 'svelte/motion';
 import { cubicOut } from 'svelte/easing';
 
-const completedCount = tweened(0, {
+const completedCount = new Tween(0, {
   duration: 800,
   easing: cubicOut
 });
@@ -706,12 +706,12 @@ const completedCount = tweened(0, {
 completedCount.set(42);  // Animates: 0 -> 42 over 800ms
 ```
 
-The `$completedCount` syntax subscribes to the tweened store. On every animation frame, Svelte recalculates the value between the starting point and the target, applies the easing function, and re-renders the component. With `cubicOut`, the animation starts fast and decelerates — it feels snappy and responsive.
+The `completedCount.current` property reads the tween's current interpolated value. On every animation frame, Svelte recalculates the value between the starting point and the target, applies the easing function, and re-renders the component. With `cubicOut`, the animation starts fast and decelerates — it feels snappy and responsive.
 
 For the completion rate, you need a custom interpolator because the default linear interpolation produces too many decimal places mid-animation:
 
 ```typescript
-const completionRate = tweened(0, {
+const completionRate = new Tween(0, {
   duration: 900,
   easing: cubicOut,
   interpolate: (from, to) => (t) =>
@@ -842,7 +842,7 @@ Build an extended dashboard section called "Team Leaderboard" that streams separ
 
 1. Add a new async function `getTeamLeaderboard(teamId)` in the load function that returns an array of `{ name, avatar, tasksCompleted, avgCycleTime }` objects. Return it as an unresolved promise alongside the other slow data.
 2. In the page component, add a new `{#await data.leaderboard}` section with a skeleton state (3 placeholder rows), a resolved state showing a ranked list, and an error fallback.
-3. Use `tweened` to animate each team member's task count from 0 to their actual value, staggered by 100ms per row (use the `delay` option).
+3. Use `Tween` to animate each team member's task count from 0 to their actual value, staggered by 100ms per row (use the `delay` option).
 4. Add a `$derived.by()` that determines the "MVP" — the team member with the highest tasks completed — and displays a trophy icon next to their name.
 5. Use `{@const}` inside the leaderboard `{#each}` to format cycle time as "Xh Ym" and to compute a percentage bar width relative to the highest performer.
 
@@ -850,7 +850,7 @@ Build an extended dashboard section called "Team Leaderboard" that streams separ
 
 - SvelteKit streams unresolved promises from `load` functions — `await` fast data to block rendering, return slow data as bare promises to stream it
 - Each `{#await promise}` block has three states: pending (skeleton), resolved (content), and rejected (error) — they are independent, so one failure does not block others
-- `tweened` from `svelte/motion` animates numeric values smoothly — use custom `interpolate` functions to control decimal precision during the animation
+- `Tween` from `svelte/motion` animates numeric values smoothly — use custom `interpolate` functions to control decimal precision during the animation
 - `$derived.by()` lets you write multi-step computations with early returns and conditional logic — perfect for trend indicators and status labels
 - `{@const}` declares block-scoped constants inside `{#each}` loops and other template blocks — use it for per-item formatting like number localization, percentages, and duration strings
 - The streaming pattern gives users a dramatically faster perceived load time — fast content in under 100ms, slow content fills in progressively

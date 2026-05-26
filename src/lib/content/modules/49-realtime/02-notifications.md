@@ -239,19 +239,19 @@ toast.info('New comment', 'Sarah commented on "Fix login bug".');
 
 ## Spring-Based Badge Animation
 
-The notification badge in the header shows the count of unread notifications. When that count changes, a simple number swap feels flat. Using `spring` from `svelte/motion` adds physics-based animation — the badge bounces slightly as the number updates, drawing the user's eye without being obnoxious.
+The notification badge in the header shows the count of unread notifications. When that count changes, a simple number swap feels flat. Using `Spring` from `svelte/motion` adds physics-based animation — the badge bounces slightly as the number updates, drawing the user's eye without being obnoxious.
 
 ```svelte
 <!-- src/lib/components/layout/NotificationBadge.svelte -->
 <script lang="ts">
-  import { spring } from 'svelte/motion';
+  import { Spring } from 'svelte/motion';
 
   let { count }: { count: number } = $props();
 
   // The spring creates a smooth animated value that settles
   // with a slight bounce. Stiffness controls how fast it snaps,
   // damping controls how much it bounces.
-  const animatedScale = spring(1, {
+  const animatedScale = new Spring(1, {
     stiffness: 300,
     damping: 15
   });
@@ -260,9 +260,9 @@ The notification badge in the header shows the count of unread notifications. Wh
   // then the spring settles it back to 1.0 with a bounce
   $effect(() => {
     if (count > 0) {
-      animatedScale.set(1.4);
+      animatedScale.target = 1.4;
       // After a short delay, spring back to normal
-      setTimeout(() => animatedScale.set(1.0), 100);
+      setTimeout(() => animatedScale.target = 1.0, 100);
     }
   });
 </script>
@@ -270,7 +270,7 @@ The notification badge in the header shows the count of unread notifications. Wh
 {#if count > 0}
   <span
     class="badge"
-    style:transform="scale({$animatedScale})"
+    style:transform="scale({animatedScale.current})"
   >
     {count > 99 ? '99+' : count}
   </span>
@@ -295,7 +295,7 @@ The notification badge in the header shows the count of unread notifications. Wh
 </style>
 ```
 
-The spring function creates a store-like value that animates toward its target using a physics simulation. With `stiffness: 300` and `damping: 15`, the badge overshoots slightly and oscillates before settling — like a real physical object coming to rest. The `$animatedScale` syntax (with the dollar prefix) subscribes to the spring's current value, which Svelte re-renders on every animation frame.
+The `Spring` class creates a reactive object that animates toward its target using a physics simulation. With `stiffness: 300` and `damping: 15`, the badge overshoots slightly and oscillates before settling — like a real physical object coming to rest. The `animatedScale.current` property holds the spring's current value, which Svelte re-renders on every animation frame.
 
 ## Notification Dropdown with use:clickOutside
 
@@ -646,7 +646,7 @@ The notification system has four layers:
 1. **Toast state** (`toast.svelte.ts`) — a module-level `$state` array that any component or module can push to, with auto-dismiss timers.
 2. **Toast renderer** (`NotificationToast.svelte`) — mounted once in the layout, renders the stack with `fly`/`fade` transitions and `animate:flip` for smooth reordering.
 3. **Dropdown** (`NotificationDropdown.svelte`) — persistent notification history loaded with `{#await}`, closed with `use:clickOutside`.
-4. **Badge** (`NotificationBadge.svelte`) — unread count with a `spring`-based bounce animation.
+4. **Badge** (`NotificationBadge.svelte`) — unread count with a `Spring`-based bounce animation.
 
 SSE events from the previous lesson trigger toasts for actions by other team members:
 
@@ -682,7 +682,7 @@ Build a "Toast Playground" page that demonstrates all the features:
 - Use `in:fly` and `out:fade` on toast elements for distinct entrance and exit animations — slide in from the side, fade out on dismiss
 - `animate:flip` makes remaining items glide smoothly when a sibling is removed from the middle of a list — requires a keyed `{#each}` block
 - Manage toast state in a module-level `$state` array with `setTimeout` for auto-dismiss and manual `clearTimeout` for early dismissal
-- `spring` from `svelte/motion` adds physics-based animation to numeric values — use it for badge counts, progress indicators, and other values that benefit from natural-feeling motion
+- `Spring` from `svelte/motion` adds physics-based animation to numeric values — use it for badge counts, progress indicators, and other values that benefit from natural-feeling motion
 - The `use:clickOutside` action pattern attaches a document-level click listener and checks `node.contains()` — remember to clean up in the `destroy` function
 - `{#await promise}` gives you pending, resolved, and rejected states with zero boilerplate — perfect for loading notification history
 - `<svelte:window onfocus={handler}>` fires when the user returns to the tab — use it for marking notifications as read or refreshing stale data

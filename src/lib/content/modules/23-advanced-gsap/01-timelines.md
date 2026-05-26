@@ -168,6 +168,8 @@ if (!prefersReducedMotion) {
 
 This is an accessibility requirement — not optional. Many users rely on reduced motion settings.
 
+> **Tip:** In Svelte 5.7+, you can use `prefersReducedMotion` from `svelte/motion` instead of the manual `window.matchMedia` call. It is a reactive boolean that updates automatically if the user changes their OS setting mid-session, and it avoids SSR issues since it is handled by the framework.
+
 ## Key Takeaways
 
 - `gsap.timeline()` creates a sequence container for multiple animations

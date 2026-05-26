@@ -166,6 +166,8 @@ SvelteKit's own `$app/stores` module exposes `page`, `navigating`, and `updated`
 
 ## Migration: Stores to Runes
 
+> **Note on Motion Stores:** The store-based `tweened()` and `spring()` functions from `svelte/motion` are deprecated in Svelte 5. They are replaced by the class-based `Tween` and `Spring` APIs, which use a `.current` property instead of the `$` prefix auto-subscription. When migrating from stores to runes, remember to migrate motion stores as well — replace `tweened(0)` with `new Tween(0)` and `spring(0)` with `new Spring(0)`, then access values via `.current` instead of `$storeName`.
+
 If you have existing store-based code, converting to runes is straightforward:
 
 ```typescript

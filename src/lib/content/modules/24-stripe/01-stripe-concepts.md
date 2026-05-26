@@ -52,31 +52,19 @@ STRIPE_SECRET_KEY=sk_test_your_key_here
 Understanding the data flow prevents an entire class of mistakes:
 
 ```
-┌──────────┐       ┌──────────────┐       ┌──────────────┐
-│  Browser  │──────▶│ Your Server  │──────▶│  Stripe API  │
-│ (Client)  │◀──────│  (SvelteKit) │◀──────│              │
-└──────────┘       └──────────────┘       └──────────────┘
-     │                     ▲                      │
-     │                     │                      │
-     │   Card details go   │   Webhook events     │
-     │   directly to       │   (POST requests     │
-     │   Stripe via        │   from Stripe to     │
-     │   Stripe.js         │   your server)       │
-     │                     │                      │
-     └─────────────────────┼──────────────────────┘
-       (Stripe.js /        │
-        Stripe Elements)   │
-                    ┌──────┴───────┐
-                    │   Webhook    │
-                    │   Endpoint   │
-                    │ /api/webhook │
-                    └──────────────┘
+Browser ──────▶ Your Server ──────▶ Stripe API
+   │                 ▲                   │
+   │                 │ Webhook POSTs     │
+   │                 └───────────────────┘
+   │
+   └──── Card details go directly to Stripe via Stripe.js
+         (never through your server)
 ```
 
 Three distinct communication paths:
 
 1. **Browser to Stripe** (via Stripe.js): card details go directly to Stripe, never through your server
-2. **Your Server to Stripe API**: creating Payment Intents, managing customers, querying subscriptions — all authenticated with your secret key
+2. **Your Server to Stripe API**: creating Payment Intents, managing customers, querying subscriptions — authenticated with your secret key
 3. **Stripe to Your Webhook Endpoint**: Stripe pushes event notifications to your server asynchronously
 
 ## Core Stripe Objects
@@ -88,33 +76,27 @@ Stripe's data model is built around a handful of objects that compose together. 
 A **Product** is what you sell. A **Price** is how much it costs. They are separate because one product can have multiple prices (monthly vs. annual, different currencies, different tiers).
 
 ```typescript
-// This runs on your server
 import Stripe from 'stripe';
 const stripe = new Stripe(STRIPE_SECRET_KEY);
 
-// Create a product (usually done once in the dashboard)
 const product = await stripe.products.create({
   name: 'SvelteKit Pro Course',
   description: 'Complete guide to building production SvelteKit apps'
 });
 
-// Attach a one-time price
+// One-time price — amounts are always in smallest currency unit (cents for USD)
 const oneTimePrice = await stripe.prices.create({
-  product: product.id,
-  unit_amount: 4900,   // $49.00 — always in smallest currency unit
-  currency: 'usd'
+  product: product.id, unit_amount: 4900, currency: 'usd'  // $49.00
 });
 
-// Attach a recurring price for a subscription model
+// Recurring price for subscriptions
 const monthlyPrice = await stripe.prices.create({
-  product: product.id,
-  unit_amount: 1200,   // $12.00/month
-  currency: 'usd',
+  product: product.id, unit_amount: 1200, currency: 'usd',  // $12.00/month
   recurring: { interval: 'month' }
 });
 ```
 
-**Important:** Amounts are always in the smallest currency unit. USD uses cents, so `4900` = $49.00. JPY has no sub-unit, so `4900` = 4900 yen. This catches people off guard — double-check the [Stripe currency docs](https://stripe.com/docs/currencies) for zero-decimal currencies.
+**Watch out:** `4900` in USD = $49.00, but `4900` in JPY = 4900 yen (no sub-unit). Check the [Stripe currency docs](https://stripe.com/docs/currencies) for zero-decimal currencies.
 
 ### Customers
 
@@ -144,20 +126,13 @@ Created → Requires Payment Method → Requires Confirmation → Processing →
 You create a PaymentIntent on your server with the amount and currency, then the client confirms it with the customer's card details. This two-step process ensures your server controls the amount charged — the client can never modify it.
 
 ```typescript
-// Server: create the PaymentIntent
 const paymentIntent = await stripe.paymentIntents.create({
-  amount: 2000,        // $20.00
-  currency: 'usd',
+  amount: 2000,  currency: 'usd',  // $20.00
   customer: customer.id,
-  metadata: {
-    productId: 'course-123',
-    userId: 'user_abc123'
-  }
+  metadata: { productId: 'course-123', userId: 'user_abc123' }
 });
 
-// Send the client_secret to the browser
-// The client_secret lets the browser confirm the payment
-// but NOT modify the amount or read sensitive data
+// The client_secret lets the browser confirm the payment but NOT modify the amount
 return { clientSecret: paymentIntent.client_secret };
 ```
 
@@ -166,35 +141,17 @@ return { clientSecret: paymentIntent.client_secret };
 While PaymentIntents give you full control, **Checkout Sessions** are the fast path. Stripe hosts the entire payment page for you — a polished, localized, mobile-optimized form that handles dozens of payment methods automatically.
 
 ```typescript
-// Server: create a Checkout Session
 const session = await stripe.checkout.sessions.create({
-  mode: 'payment',    // or 'subscription' for recurring
+  mode: 'payment',  // or 'subscription' for recurring
   customer: customer.id,
-  line_items: [
-    {
-      price: oneTimePrice.id,
-      quantity: 1
-    }
-  ],
+  line_items: [{ price: oneTimePrice.id, quantity: 1 }],
   success_url: 'https://yoursite.com/success?session_id={CHECKOUT_SESSION_ID}',
   cancel_url: 'https://yoursite.com/cancel'
 });
-
-// Redirect the customer to Stripe's hosted page
-return { url: session.url };
+return { url: session.url };  // Redirect customer to Stripe's hosted page
 ```
 
-The flow looks like this:
-
-```
-1. Customer clicks "Buy" on your site
-2. Your server creates a Checkout Session
-3. Customer is redirected to checkout.stripe.com
-4. Customer enters card details on Stripe's page
-5. Stripe processes the payment
-6. Customer is redirected back to your success_url
-7. Your webhook receives the payment confirmation
-```
+The flow: Customer clicks "Buy" on your site -> your server creates a Checkout Session -> customer is redirected to checkout.stripe.com -> enters card details -> Stripe processes payment -> customer is redirected back to your `success_url` -> your webhook receives the payment confirmation.
 
 ### Subscriptions
 
@@ -209,13 +166,13 @@ const subscription = await stripe.subscriptions.create({
 });
 ```
 
-## The Checkout Flow: Hosted vs. Embedded
+## Hosted Checkout vs. Embedded (Stripe Elements)
 
-You have two main approaches to collecting payments, each with different tradeoffs:
+You have two approaches to collecting payments:
 
 **Hosted Checkout** (redirect to Stripe): fastest to implement, highest conversion rates (Stripe A/B tests their form constantly), supports the most payment methods. The downside: the customer leaves your site.
 
-**Embedded Checkout** (Stripe Elements on your page): the payment form lives on your site using Stripe Elements — prebuilt UI components that securely collect card details. You get full design control, but you handle more of the UX and support fewer payment methods by default.
+**Embedded Checkout** (Stripe Elements): the payment form lives on your site using prebuilt UI components that securely collect card details. You get full design control but handle more of the UX.
 
 ```svelte
 <!-- Embedded payment form using Stripe Elements -->
@@ -224,9 +181,7 @@ You have two main approaches to collecting payments, each with different tradeof
   import { PUBLIC_STRIPE_PUBLISHABLE_KEY } from '$env/static/public';
   import { onMount } from 'svelte';
 
-  let cardElement: any;
-  let stripe: any;
-  let elements: any;
+  let cardElement: any, stripe: any, elements: any;
 
   onMount(async () => {
     stripe = await loadStripe(PUBLIC_STRIPE_PUBLISHABLE_KEY);
@@ -236,20 +191,15 @@ You have two main approaches to collecting payments, each with different tradeof
   });
 
   async function handleSubmit() {
-    // Fetch clientSecret from your server
     const res = await fetch('/api/create-payment-intent', { method: 'POST' });
     const { clientSecret } = await res.json();
 
     const { error, paymentIntent } = await stripe.confirmCardPayment(
-      clientSecret,
-      { payment_method: { card: cardElement } }
+      clientSecret, { payment_method: { card: cardElement } }
     );
 
-    if (error) {
-      console.error(error.message);
-    } else if (paymentIntent.status === 'succeeded') {
-      window.location.href = '/success';
-    }
+    if (error) console.error(error.message);
+    else if (paymentIntent.status === 'succeeded') window.location.href = '/success';
   }
 </script>
 
@@ -259,7 +209,7 @@ You have two main approaches to collecting payments, each with different tradeof
 </form>
 ```
 
-For most projects, start with Hosted Checkout. Move to Stripe Elements when you have a specific design requirement that justifies the extra complexity.
+For most projects, start with Hosted Checkout. Move to Elements when you have a specific design requirement that justifies the extra complexity.
 
 ## Webhooks: The Critical Piece Most Tutorials Skip
 
@@ -280,47 +230,30 @@ export async function POST({ request }) {
   const signature = request.headers.get('stripe-signature')!;
 
   let event: Stripe.Event;
-
   try {
-    // CRITICAL: Verify the webhook came from Stripe, not an attacker
-    event = stripe.webhooks.constructEvent(
-      body,
-      signature,
-      STRIPE_WEBHOOK_SECRET
-    );
+    // Verify the webhook came from Stripe, not an attacker
+    event = stripe.webhooks.constructEvent(body, signature, STRIPE_WEBHOOK_SECRET);
   } catch (err) {
-    console.error('Webhook signature verification failed:', err);
     return json({ error: 'Invalid signature' }, { status: 400 });
   }
 
-  // Handle the event
   switch (event.type) {
-    case 'checkout.session.completed': {
-      const session = event.data.object as Stripe.Checkout.Session;
-      // Grant access to the product
-      await grantAccess(session.customer, session.metadata.productId);
+    case 'checkout.session.completed':
+      await grantAccess(event.data.object.customer, event.data.object.metadata.productId);
       break;
-    }
-    case 'customer.subscription.deleted': {
-      const subscription = event.data.object as Stripe.Subscription;
-      // Revoke access when subscription ends
-      await revokeAccess(subscription.customer);
+    case 'customer.subscription.deleted':
+      await revokeAccess(event.data.object.customer);
       break;
-    }
-    case 'invoice.payment_failed': {
-      const invoice = event.data.object as Stripe.Invoice;
-      // Notify the customer their payment failed
-      await notifyPaymentFailed(invoice.customer);
+    case 'invoice.payment_failed':
+      await notifyPaymentFailed(event.data.object.customer);
       break;
-    }
   }
 
-  // Always return 200 to acknowledge receipt
-  return json({ received: true });
+  return json({ received: true });  // Always return 200 to acknowledge receipt
 }
 ```
 
-**Why signature verification matters:** without it, anyone could POST to your webhook endpoint and fake a "payment succeeded" event to get free access. The `STRIPE_WEBHOOK_SECRET` (found in your Stripe Dashboard under Webhooks) lets you cryptographically verify that the request actually came from Stripe.
+**Why signature verification matters:** without it, anyone could POST to your webhook endpoint and fake a "payment succeeded" event. The `STRIPE_WEBHOOK_SECRET` (from your Dashboard under Webhooks) cryptographically verifies the request came from Stripe.
 
 ## Idempotency: Webhooks Can Fire More Than Once
 
@@ -350,9 +283,7 @@ The pattern is simple: check if the action was already performed before performi
 
 ## Test Mode: Develop Safely
 
-Stripe provides a complete test environment that mirrors production. Test mode uses different API keys (prefixed with `pk_test_` and `sk_test_`) and processes no real money. Always develop and test against test mode.
-
-Stripe provides test card numbers that simulate different scenarios:
+Stripe's test environment mirrors production but processes no real money. Always develop in test mode. Stripe provides test card numbers that simulate different scenarios:
 
 ```
 Successful payment:      4242 4242 4242 4242
@@ -365,47 +296,29 @@ Processing error:        4000 0000 0000 0119
 
 For all test cards, use any future expiry date (e.g., 12/34) and any 3-digit CVC (e.g., 123).
 
-For testing webhooks locally, use the **Stripe CLI**:
+For testing webhooks locally, use the **Stripe CLI** to forward events to your dev server:
 
 ```bash
-# Install the Stripe CLI, then:
 stripe listen --forward-to localhost:5173/api/webhook
+# Gives you a local webhook signing secret (whsec_...)
 
-# This gives you a webhook signing secret for local development:
-# whsec_... (use this as STRIPE_WEBHOOK_SECRET in your .env)
-```
-
-The Stripe CLI forwards webhook events from Stripe's test environment to your local SvelteKit dev server. You can also trigger test events manually:
-
-```bash
+# Trigger test events manually:
 stripe trigger checkout.session.completed
-stripe trigger customer.subscription.deleted
 ```
 
 ## The Stripe Dashboard
 
-The Stripe Dashboard at dashboard.stripe.com is your control center. Spend time exploring it — it shows:
-
-- **Payments** — every transaction, successful or failed, with full event logs
-- **Customers** — saved customer profiles and their payment history
-- **Products** — items or plans you sell, with their associated prices
-- **Subscriptions** — active, past-due, and cancelled subscriptions
-- **Webhooks** — event deliveries with status, payload, and retry history
-- **Developers** — API keys, request logs, event logs, and webhook endpoints
-
-The event logs under Developers are especially useful for debugging. Every API call and webhook delivery is logged with the full request and response. When something goes wrong, start there.
+The Stripe Dashboard at dashboard.stripe.com is your control center: Payments, Customers, Products, Subscriptions, Webhooks, and Developers (API keys, request logs, event logs). The event logs under Developers are especially useful for debugging — every API call and webhook delivery is logged with the full request and response. When something goes wrong, start there.
 
 ## Try It
 
 1. **Set up Stripe**: Create a Stripe account at stripe.com. Find your test API keys under Developers > API Keys. Store them in your `.env` file.
 
-2. **Create a PaymentIntent**: Install the Stripe SDK with `npm install stripe`. Write a server-side script that creates a PaymentIntent for $49.00 USD and logs the `client_secret` to the console.
+2. **Create a PaymentIntent**: Install the Stripe SDK with `npm install stripe`. Write a server-side script that creates a PaymentIntent for $49.00 USD and logs the `client_secret` to the console. Find it in the Dashboard under Payments and examine its event timeline.
 
-3. **Explore the Dashboard**: After creating the PaymentIntent, find it in your Stripe Dashboard under Payments. Click into it and examine the event timeline — notice how Stripe tracks every state change.
+3. **Set up local webhooks**: Install the [Stripe CLI](https://stripe.com/docs/stripe-cli), run `stripe listen --forward-to localhost:5173/api/webhook`, and trigger a test event with `stripe trigger checkout.session.completed`. Create a basic webhook endpoint in SvelteKit that logs the event type.
 
-4. **Set up local webhooks**: Install the [Stripe CLI](https://stripe.com/docs/stripe-cli), run `stripe listen --forward-to localhost:5173/api/webhook`, and trigger a test event with `stripe trigger checkout.session.completed`. Create a basic webhook endpoint in SvelteKit that logs the event type.
-
-5. **Test idempotency**: Trigger the same webhook event twice and verify your handler produces the same result both times without duplicating data.
+4. **Test idempotency**: Trigger the same webhook event twice and verify your handler produces the same result both times without duplicating data.
 
 ## Key Takeaways
 

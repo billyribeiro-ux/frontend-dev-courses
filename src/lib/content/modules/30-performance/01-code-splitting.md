@@ -95,7 +95,7 @@ This pattern gives you loading states, error handling, and code splitting in a s
 
 ## A Reusable Lazy-Loading Wrapper
 
-For a pattern you will use repeatedly, extract it into a component:
+For a pattern you will use repeatedly, extract it into a reusable component:
 
 ```svelte
 <!-- src/lib/components/Lazy.svelte -->
@@ -128,11 +128,10 @@ For a pattern you will use repeatedly, extract it into a component:
 {/if}
 ```
 
-Use it anywhere with any dynamically imported component:
+Use it anywhere — props are forwarded to the loaded component:
 
 ```svelte
 <Lazy loader={() => import('$lib/components/Chart.svelte')} data={chartData} />
-<Lazy loader={() => import('$lib/components/Map.svelte')} center={coords} zoom={12} />
 ```
 
 ## Tree Shaking: Dead Code Elimination

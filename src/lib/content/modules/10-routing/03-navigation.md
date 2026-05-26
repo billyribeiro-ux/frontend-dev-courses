@@ -22,9 +22,7 @@ The simplest and most common way to navigate is with regular anchor tags:
 {@render children()}
 ```
 
-SvelteKit automatically intercepts clicks on `<a>` tags that point to internal routes. Instead of a full page reload, it fetches the data for the target page, swaps in the new page content, and updates the browser's URL bar. The result: instant, smooth navigation. The layout stays mounted. No white flash. No network waterfall.
-
-This interception happens at the document level. SvelteKit listens for click events on the entire document and checks whether the clicked element (or its ancestor) is an `<a>` tag pointing to a route the app owns. You do not need to opt in — it works automatically for every `<a>` tag in your application.
+SvelteKit automatically intercepts clicks on `<a>` tags that point to internal routes. Instead of a full page reload, it fetches the data for the target page, swaps in the new page content, and updates the browser's URL bar. The layout stays mounted, no white flash, no network waterfall. This interception happens at the document level — you do not need to opt in.
 
 ## When SvelteKit Does NOT Intercept
 
@@ -49,17 +47,7 @@ SvelteKit is smart about which clicks to intercept. It leaves these alone:
 <a href="/legacy-page" data-sveltekit-reload>Legacy Page</a>
 ```
 
-The `data-sveltekit-reload` attribute is useful for pages that need a full server round-trip — perhaps because they are served by a different backend, or because you need to re-initialize some client-side state from scratch. You can put it on a container element to apply it to all links inside:
-
-```svelte
-<div data-sveltekit-reload>
-  <a href="/old-app/page1">Page 1</a>
-  <a href="/old-app/page2">Page 2</a>
-  <!-- Both links will cause full page reloads -->
-</div>
-```
-
-There is also `data-sveltekit-noscroll`, which prevents SvelteKit from scrolling to the top after navigation — useful for tabs or filtering UI where the user's scroll position should not change.
+The `data-sveltekit-reload` attribute is useful for pages served by a different backend or when you need full re-initialization. You can put it on a container element to apply it to all links inside. There is also `data-sveltekit-noscroll`, which prevents SvelteKit from scrolling to the top after navigation — useful for tabs or filtering UI.
 
 ## Programmatic Navigation with goto()
 
@@ -69,34 +57,17 @@ Sometimes you need to navigate from JavaScript code — after a form submission,
 <script lang="ts">
   import { goto } from '$app/navigation';
 
-  function handleLogin() {
+  async function handleLogin() {
     // Perform login logic...
-    goto('/dashboard');
-  }
-
-  async function handleFormSubmit() {
-    const response = await fetch('/api/submit', { method: 'POST' });
-
-    if (response.ok) {
-      goto('/success');
-    } else {
-      goto('/error');
-    }
+    await goto('/dashboard');
+    // Navigation is complete — the dashboard is now rendered
   }
 </script>
 
-<button onclick={handleLogin}>
-  Log In
-</button>
+<button onclick={handleLogin}>Log In</button>
 ```
 
-`goto()` returns a Promise that resolves when navigation is complete. This matters when you need to run code _after_ the new page has loaded:
-
-```typescript
-await goto('/dashboard');
-// The dashboard page is now fully rendered and its load function has completed
-console.log('Navigation complete');
-```
+`goto()` returns a Promise that resolves when navigation is complete, so you can `await` it when you need to run code after the new page has loaded.
 
 ### goto() Options
 
@@ -109,16 +80,11 @@ goto('/dashboard', { replaceState: true });
 // Preserve the current scroll position
 goto('/results?page=2', { noScroll: true });
 
-// Skip running load functions (use cached data)
-goto('/dashboard', { invalidateAll: false });
-
 // Pass state that is not visible in the URL
-goto('/checkout', {
-  state: { fromCart: true, itemCount: 3 }
-});
+goto('/checkout', { state: { fromCart: true } });
 ```
 
-The `replaceState` option is essential for redirect patterns. After a user logs in, you typically want to replace the login page in history so that pressing back does not take them back to the login form. This is a small detail that separates a polished app from a frustrating one.
+The `replaceState` option is essential for redirect patterns. After a user logs in, you want to replace the login page in history so pressing back does not return to the login form.
 
 ## Navigation Lifecycle Hooks
 
@@ -147,23 +113,7 @@ SvelteKit provides lifecycle hooks that fire before and after navigation. These 
 <button onclick={() => hasUnsavedChanges = false}>Save</button>
 ```
 
-The `navigation` object gives you rich information about what is happening:
-
-```typescript
-beforeNavigate(({ from, to, type, cancel }) => {
-  // from: the current page (URL, params, route)
-  // to: the destination page (null if navigating away from the app)
-  // type: 'link' | 'goto' | 'popstate' | 'leave'
-  // cancel(): prevent the navigation
-
-  if (type === 'leave') {
-    // The user is leaving the site entirely (closing tab, typing a new URL)
-    // You cannot cancel this, but you can trigger a browser prompt
-  }
-
-  console.log(`Navigating from ${from?.url.pathname} to ${to?.url.pathname}`);
-});
-```
+The `navigation` object provides `from`, `to`, `type` (one of `'link'`, `'goto'`, `'popstate'`, `'leave'`), and `cancel()`. This gives you full context about what triggered the navigation and where the user is going.
 
 ### afterNavigate
 
@@ -174,19 +124,14 @@ beforeNavigate(({ from, to, type, cancel }) => {
   import { afterNavigate } from '$app/navigation';
 
   afterNavigate((navigation) => {
-    // Track page view
     analytics.track('page_view', {
-      from: navigation.from?.url.pathname,
-      to: navigation.to?.url.pathname
+      path: navigation.to?.url.pathname
     });
-
-    // Focus the main content for accessibility
-    document.getElementById('main-content')?.focus();
   });
 </script>
 ```
 
-`afterNavigate` is the right place for side effects that should happen _after_ the DOM has updated. If you try to do this work in `onMount`, it only runs on the initial page load — not on subsequent client-side navigations. `afterNavigate` runs every time.
+`afterNavigate` is the right place for side effects that should happen _after_ the DOM has updated. Unlike `onMount`, which only runs on the initial page load, `afterNavigate` runs on every client-side navigation.
 
 ## Accessing Page State with $app/state
 
@@ -209,11 +154,9 @@ The `page` object includes:
 - **`page.params`** — the dynamic route parameters (e.g., `{ slug: 'hello' }`)
 - **`page.route.id`** — the route's file path (e.g., `/blog/[slug]`)
 - **`page.data`** — the data returned by load functions
-- **`page.status`** — the HTTP status code
 - **`page.error`** — the error object, if on an error page
-- **`page.form`** — form action data returned from a `+page.server.ts` action
 
-Because `page` from `$app/state` is deeply reactive in Svelte 5, you can reference its properties directly in your template and they will update automatically when the URL changes. No need for `$derived` when reading directly in the template — but use `$derived` if you want to compute a value in the script block:
+Because `page` from `$app/state` is deeply reactive in Svelte 5, you can reference its properties directly in your template and they update automatically when the URL changes. Use `$derived` when you need to compute a value in the script block:
 
 ```svelte
 <script lang="ts">
@@ -224,17 +167,13 @@ Because `page` from `$app/state` is deeply reactive in Svelte 5, you can referen
 </script>
 ```
 
-> **Note:** You may also see `page` imported from `$app/stores` in older code. That API uses Svelte stores (with the `$page` syntax). Both work, but `$app/state` is the recommended approach for Svelte 5 projects.
+> **Note:** Older code may import `page` from `$app/stores` using the `$page` syntax. Both work, but `$app/state` is the recommended approach for Svelte 5 projects.
 
 ## Prefetching for Speed
 
 SvelteKit can preload page data before the user clicks a link. By default, SvelteKit prefetches data when the user hovers over a link. The data is ready by the time they click, making navigation feel instantaneous.
 
-There are two types of prefetching, and they serve different purposes:
-
-### data-sveltekit-preload-data
-
-Preloads the page's data (runs the `load` function):
+Use `data-sveltekit-preload-data` to control when data is fetched:
 
 ```svelte
 <!-- Preload on hover (default behavior) -->
@@ -250,19 +189,7 @@ Preloads the page's data (runs the `load` function):
 <a href="/about" data-sveltekit-preload-data="off">About</a>
 ```
 
-### data-sveltekit-preload-code
-
-Preloads only the JavaScript code for the page (does not run the `load` function):
-
-```svelte
-<!-- Preload the JavaScript module eagerly -->
-<a href="/heavy-page" data-sveltekit-preload-code="eager">Heavy Page</a>
-
-<!-- Preload code on hover, but do not run load functions -->
-<a href="/heavy-page" data-sveltekit-preload-code="hover">Heavy Page</a>
-```
-
-The distinction matters for performance tuning. Preloading code is cheap — you are downloading a JavaScript module. Preloading data runs your server load function, which might involve database queries. For pages the user is _likely_ to visit, preload both. For pages they _might_ visit, preload just the code.
+There is also `data-sveltekit-preload-code`, which preloads only the JavaScript module without running the `load` function. This is cheaper than preloading data (no database queries), making it useful for pages the user _might_ visit. For pages they are _likely_ to visit, preload data too.
 
 You can set preloading on a container to apply it to all links inside:
 
@@ -281,52 +208,11 @@ A common pattern is highlighting the current page in the navigation. Use `$app/s
 ```svelte
 <script lang="ts">
   import { page } from '$app/state';
-</script>
-
-<nav>
-  <a href="/" class:active={page.url.pathname === '/'}>
-    Home
-  </a>
-  <a href="/about" class:active={page.url.pathname === '/about'}>
-    About
-  </a>
-  <a
-    href="/blog"
-    class:active={page.url.pathname.startsWith('/blog')}
-  >
-    Blog
-  </a>
-</nav>
-
-<style>
-  a {
-    text-decoration: none;
-    color: #666;
-    padding: 0.5rem 1rem;
-    border-bottom: 2px solid transparent;
-    transition: color 0.2s, border-color 0.2s;
-  }
-  a.active {
-    color: #ff3e00;
-    font-weight: bold;
-    border-bottom-color: #ff3e00;
-  }
-</style>
-```
-
-The `class:active` directive conditionally applies the `active` class. For the blog link, `startsWith('/blog')` ensures it stays highlighted on all blog subpages like `/blog/my-post` or `/blog/category/svelte`.
-
-For cleaner code, extract this into a reusable pattern:
-
-```svelte
-<script lang="ts">
-  import { page } from '$app/state';
 
   const navLinks = [
     { href: '/', label: 'Home', exact: true },
     { href: '/about', label: 'About', exact: true },
-    { href: '/blog', label: 'Blog', exact: false },
-    { href: '/contact', label: 'Contact', exact: true }
+    { href: '/blog', label: 'Blog', exact: false }
   ];
 
   function isActive(href: string, exact: boolean): boolean {
@@ -342,108 +228,29 @@ For cleaner code, extract this into a reusable pattern:
     </a>
   {/each}
 </nav>
-```
-
-## Real Example: Navigation Bar with Guards and Redirects
-
-Here is a complete navigation system with active states, programmatic redirects, and an unsaved changes guard:
-
-```svelte
-<!-- src/routes/+layout.svelte -->
-<script lang="ts">
-  import type { Snippet } from 'svelte';
-  import { page } from '$app/state';
-  import { goto, beforeNavigate, afterNavigate } from '$app/navigation';
-
-  let { children }: { children: Snippet } = $props();
-  let isLoggedIn = $state(false);
-
-  const navLinks = [
-    { href: '/', label: 'Home', exact: true },
-    { href: '/blog', label: 'Blog', exact: false },
-    { href: '/dashboard', label: 'Dashboard', exact: false, requiresAuth: true }
-  ];
-
-  function isActive(href: string, exact: boolean): boolean {
-    if (exact) return page.url.pathname === href;
-    return page.url.pathname.startsWith(href);
-  }
-
-  // Track page views
-  afterNavigate((nav) => {
-    console.log(`Navigated to ${nav.to?.url.pathname}`);
-  });
-
-  function handleAuthClick(href: string) {
-    if (!isLoggedIn) {
-      goto(`/login?redirect=${encodeURIComponent(href)}`);
-    } else {
-      goto(href);
-    }
-  }
-</script>
-
-<nav data-sveltekit-preload-data="hover">
-  {#each navLinks as link}
-    {#if link.requiresAuth}
-      <a
-        href={link.href}
-        class:active={isActive(link.href, link.exact)}
-        onclick={(e) => {
-          if (!isLoggedIn) {
-            e.preventDefault();
-            handleAuthClick(link.href);
-          }
-        }}
-      >
-        {link.label}
-      </a>
-    {:else}
-      <a href={link.href} class:active={isActive(link.href, link.exact)}>
-        {link.label}
-      </a>
-    {/if}
-  {/each}
-</nav>
-
-<main>
-  {@render children()}
-</main>
 
 <style>
-  nav {
-    display: flex;
-    gap: 0.5rem;
-    padding: 1rem;
-    background: #1a1a2e;
-  }
   a {
-    color: #a0a0c0;
     text-decoration: none;
+    color: #666;
     padding: 0.5rem 1rem;
-    border-radius: 6px;
-    transition: background 0.2s, color 0.2s;
-  }
-  a:hover {
-    background: #16213e;
-    color: #e0e0ff;
+    border-bottom: 2px solid transparent;
   }
   a.active {
-    background: #0f3460;
-    color: #fff;
-    font-weight: 600;
-  }
-  main {
-    padding: 2rem;
+    color: #ff3e00;
+    font-weight: bold;
+    border-bottom-color: #ff3e00;
   }
 </style>
 ```
+
+The `class:active` directive conditionally applies the `active` class. For the blog link, `startsWith('/blog')` ensures it stays highlighted on subpages like `/blog/my-post`. Using `exact: true` for the home link prevents `/` from matching every path.
 
 ## Common Patterns
 
 ### Auth Guards
 
-Protect routes by checking authentication status in `beforeNavigate` or, more robustly, in a layout's `load` function:
+The most robust way to protect routes is in a layout's server `load` function:
 
 ```typescript
 // src/routes/(app)/+layout.server.ts
@@ -452,7 +259,6 @@ import { redirect } from '@sveltejs/kit';
 
 export const load: LayoutServerLoad = async ({ locals, url }) => {
   if (!locals.user) {
-    // Redirect to login, preserving the intended destination
     throw redirect(303, `/login?redirect=${encodeURIComponent(url.pathname)}`);
   }
 
@@ -460,11 +266,11 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 };
 ```
 
-This is the preferred approach for auth guards. It runs on the server, works with SSR, and prevents the protected page from ever rendering. Client-side guards with `beforeNavigate` are a secondary layer — useful for UX polish, but not a security boundary.
+This runs on the server, works with SSR, and prevents the protected page from ever rendering. Client-side guards with `beforeNavigate` are a secondary layer — useful for UX polish, but not a security boundary.
 
 ### Unsaved Changes Prompt
 
-Prevent data loss when a user tries to navigate away from a form with unsaved changes:
+You need _two_ mechanisms: `beforeNavigate` for client-side navigation within SvelteKit, and `beforeunload` for tab close, refresh, and external navigation:
 
 ```svelte
 <script lang="ts">
@@ -479,45 +285,26 @@ Prevent data loss when a user tries to navigate away from a form with unsaved ch
       }
     }
   });
-
-  // Also handle the browser's beforeunload event for tab close/refresh
-  function handleBeforeUnload(e: BeforeUnloadEvent) {
-    if (formDirty) {
-      e.preventDefault();
-    }
-  }
 </script>
 
-<svelte:window onbeforeunload={handleBeforeUnload} />
-
-<form>
-  <input type="text" oninput={() => formDirty = true} />
-  <button type="submit" onclick={() => formDirty = false}>Save</button>
-</form>
+<svelte:window onbeforeunload={(e) => { if (formDirty) e.preventDefault(); }} />
 ```
-
-Notice you need both `beforeNavigate` (for client-side navigation within SvelteKit) and `beforeunload` (for tab close, refresh, and navigation away from the app). They cover different scenarios.
 
 ### Post-Login Redirect
 
-After a successful login, redirect the user to wherever they were trying to go:
+After login, send the user to their intended destination using `replaceState` so the login page does not stay in browser history:
 
 ```svelte
-<!-- src/routes/login/+page.svelte -->
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
 
   async function handleLogin() {
-    // ... authenticate user ...
-
     const redirectTo = page.url.searchParams.get('redirect') || '/dashboard';
     goto(redirectTo, { replaceState: true });
   }
 </script>
 ```
-
-The `replaceState: true` ensures the login page is not in the browser history after redirect. Pressing back from the dashboard will not take the user back to the login form.
 
 ## Try It
 

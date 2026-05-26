@@ -246,40 +246,9 @@ The `@` followed by nothing means "reset all the way to the root layout." You ca
 
 Use layout resets sparingly. They are a powerful escape hatch, but if you find yourself resetting often, it might be a signal that your layout hierarchy needs rethinking.
 
-## Real Example: Full Application Layout Structure
+## Putting It All Together
 
-Here is a layout architecture for a SaaS application with a marketing site, an authenticated dashboard, and auth pages:
-
-```bash
-src/routes/
-├── +layout.svelte                 # Absolute root: fonts, CSS reset, providers
-├── (marketing)/
-│   ├── +layout.svelte             # Marketing: full-width nav, hero areas, footer
-│   ├── +page.svelte               # /
-│   ├── features/
-│   │   └── +page.svelte           # /features
-│   └── pricing/
-│       └── +page.svelte           # /pricing
-├── (app)/
-│   ├── +layout.svelte             # App shell: sidebar, top bar, notifications
-│   ├── +layout.server.ts          # Load user, permissions, feature flags
-│   ├── dashboard/
-│   │   └── +page.svelte           # /dashboard
-│   ├── projects/
-│   │   ├── +page.svelte           # /projects (list)
-│   │   └── [id]/
-│   │       ├── +page.svelte       # /projects/abc-123 (detail)
-│   │       └── settings/
-│   │           └── +page.svelte   # /projects/abc-123/settings
-│   └── account/
-│       └── +page.svelte           # /account
-└── (auth)/
-    ├── +layout.svelte             # Auth: centered card, no nav
-    ├── login/
-    │   └── +page.svelte           # /login
-    └── register/
-        └── +page.svelte           # /register
-```
+In a real SaaS application, the root layout is intentionally minimal — just global CSS and perhaps a context provider. Each route group gets its own layout defining the visual structure for that section. The `(app)` group's layout loads user data via `+layout.server.ts`, and every page under it inherits that data automatically:
 
 ```svelte
 <!-- src/routes/+layout.svelte (absolute root) -->
@@ -302,7 +271,7 @@ src/routes/
 </script>
 
 <div class="app-shell">
-  <header class="top-bar">
+  <header>
     <h1>MyApp</h1>
     <span>Welcome, {data.user.name}</span>
   </header>
@@ -314,14 +283,12 @@ src/routes/
       <a href="/account">Account</a>
     </nav>
 
-    <main>
-      {@render children()}
-    </main>
+    <main>{@render children()}</main>
   </div>
 </div>
 ```
 
-The root layout is intentionally minimal — just global styles and providers. Each route group's layout defines the visual structure for its section. The `(app)` layout loads user data in `+layout.server.ts`, and every page under it (dashboard, projects, account) can access that data without fetching it themselves.
+Every page under `(app)` — dashboard, projects, account — can access `data.user` without fetching it themselves. The layout loaded it once, and it persists across all navigation within that group.
 
 ## The Mental Model
 

@@ -69,20 +69,7 @@ Notice that a single `<dt>` can have multiple `<dd>` elements — "Prerequisites
 
 Definition lists are ideal for settings pages, product specs, FAQs, contact information — anywhere you have labeled data. They are significantly more meaningful than a `<div>` with a `<span>` for the label and another `<span>` for the value, and screen readers announce the term-description relationship.
 
-```svelte
-<!-- A FAQ using definition lists — semantically excellent -->
-<h2>Frequently Asked Questions</h2>
-<dl>
-  <dt>Is this course beginner-friendly?</dt>
-  <dd>Yes! We start from the fundamentals and build up progressively.</dd>
-
-  <dt>Do I need to know JavaScript first?</dt>
-  <dd>Basic JavaScript knowledge is helpful but not strictly required. We cover what you need as we go.</dd>
-
-  <dt>How long do I have access?</dt>
-  <dd>Lifetime access. Once you enroll, the content is yours forever.</dd>
-</dl>
-```
+Definition lists also work beautifully for FAQs — each question is a `<dt>`, each answer a `<dd>`. Far more semantic than a stack of headings and paragraphs.
 
 ## Rendering Lists in Svelte with {#each}
 
@@ -133,13 +120,13 @@ When items in a list can change — reorder, add, remove — you need to tell Sv
 </ul>
 ```
 
-The `(task.id)` after `as task` is the key. Here is what it does and why it is critical:
+The `(task.id)` after `as task` is the key. Here is why it is critical:
 
-**Without a key**, Svelte updates the list by index. If you remove the second item, Svelte sees that item at index 1 changed and item at index 2 disappeared. It updates the *content* of the second DOM node and destroys the third one. If those DOM nodes have internal state (checkbox state, animation state, input values), the state gets associated with the wrong item. The checkbox that belonged to "Fix login bug" is now sitting on "Deploy to staging."
+**Without a key**, Svelte updates by index. Remove the second item, and Svelte updates the *content* of DOM node 2 and destroys node 3. Any internal state (checkbox values, animations, input text) gets associated with the wrong item.
 
-**With a key**, Svelte tracks each DOM node by the key value. When you remove the item with `id: 2`, Svelte knows exactly which DOM node to destroy — the one keyed by `2` — and leaves the others untouched. State stays with the correct item.
+**With a key**, Svelte tracks each DOM node by the key value. Remove `id: 2`, and Svelte destroys exactly that node, leaving others untouched. State stays with the correct item.
 
-The rule: **always provide a key when list items have identity** — when they can be reordered, added, or removed. Use a stable, unique identifier (database ID, UUID), not the array index. Using the index as a key is the same as not providing a key at all.
+The rule: **always provide a key when items can be reordered, added, or removed.** Use a stable, unique identifier (database ID, UUID), not the array index — using the index is the same as no key at all.
 
 ```svelte
 <!-- Good: stable unique ID -->
@@ -178,28 +165,15 @@ Handle the empty state with an `{:else}` block — this is one of Svelte's nice 
 </ul>
 ```
 
-## Nested Lists and Complex Structures
+## Nested Lists
 
-Lists can be nested for hierarchical data. This is common for navigation menus, file trees, and category breakdowns:
+Lists can be nested for hierarchical data — navigation menus, file trees, category breakdowns. Nest the inner `<ul>` *inside* the parent `<li>`:
 
 ```svelte
 <script>
   let departments = $state([
-    {
-      name: 'Engineering',
-      teams: [
-        { name: 'Frontend', members: 8 },
-        { name: 'Backend', members: 12 },
-        { name: 'Platform', members: 5 },
-      ]
-    },
-    {
-      name: 'Design',
-      teams: [
-        { name: 'Product Design', members: 4 },
-        { name: 'Brand', members: 3 },
-      ]
-    },
+    { name: 'Engineering', teams: ['Frontend', 'Backend', 'Platform'] },
+    { name: 'Design', teams: ['Product Design', 'Brand'] },
   ]);
 </script>
 
@@ -208,8 +182,8 @@ Lists can be nested for hierarchical data. This is common for navigation menus, 
     <li>
       <strong>{dept.name}</strong>
       <ul>
-        {#each dept.teams as team (team.name)}
-          <li>{team.name} ({team.members} members)</li>
+        {#each dept.teams as team}
+          <li>{team}</li>
         {/each}
       </ul>
     </li>
@@ -217,17 +191,13 @@ Lists can be nested for hierarchical data. This is common for navigation menus, 
 </ul>
 ```
 
-The HTML structure mirrors the data structure: departments contain teams, and the nested `<ul>` inside the `<li>` reflects that containment. Screen readers will announce the nesting level, helping users understand the hierarchy.
+The HTML mirrors the data: departments contain teams, and the nested `<ul>` reflects that containment. Screen readers announce the nesting level, helping users understand the hierarchy.
 
 ## Tables: For Tabular Data Only
 
-Tables have a specific, important purpose: displaying **tabular data** — information that is naturally organized in rows and columns where the relationship between cells in the same row and column is meaningful.
+Tables display **tabular data** — information naturally organized in rows and columns. Use them for financial data, comparison charts, schedules, and statistics. **Do not** use them for page layout, card grids, or form alignment — that was a 1990s pattern and is one of the worst accessibility anti-patterns in web history.
 
-**Use tables for:** financial data, comparison charts, schedules, statistics, spreadsheet-like data.
-
-**Do not use tables for:** page layout, card grids, form alignment, or anything that is not genuinely rows-and-columns data. Using tables for layout was common in the 1990s and is one of the worst accessibility anti-patterns in web history.
-
-### Basic Table Structure
+### Accessible Table Structure
 
 ```svelte
 <table>
@@ -250,21 +220,16 @@ Tables have a specific, important purpose: displaying **tabular data** — infor
       <td>$1.8M</td>
       <td>+8%</td>
     </tr>
-    <tr>
-      <td>Asia Pacific</td>
-      <td>$1.2M</td>
-      <td>+22%</td>
-    </tr>
   </tbody>
 </table>
 ```
 
-Every element here serves a purpose:
+Every element serves a purpose:
 
-- **`<caption>`** provides a visible title for the table. Screen readers announce it when the user enters the table, giving context before they navigate the cells. Without a caption, a screen reader user lands on the table and has no idea what data they are looking at.
-- **`<thead>`** groups the header row(s). This has both semantic meaning (these are labels, not data) and practical value (the browser can keep the header visible when scrolling long tables with CSS `position: sticky`).
-- **`<th scope="col">`** marks a cell as a header and tells screen readers that it labels the entire column. When a user navigates to a data cell, the screen reader announces the column header first: "Region: Europe." Without `scope`, the relationship is ambiguous.
-- **`<tbody>`** groups the data rows. It is technically optional (the browser infers it), but being explicit improves readability and makes CSS targeting easier.
+- **`<caption>`** gives the table a title. Screen readers announce it when the user enters the table — without it, they have no idea what data they are looking at.
+- **`<thead>`** groups the header row. It also lets browsers keep headers visible with CSS `position: sticky` on long tables.
+- **`<th scope="col">`** tells screen readers this cell labels the entire column. When navigating to "$1.8M", the reader announces "Revenue: $1.8M." Without `scope`, the relationship is ambiguous.
+- **`<tbody>`** groups data rows. Technically optional but explicit is better for readability and CSS targeting.
 
 ### Row Headers and Dynamic Tables
 
@@ -308,7 +273,7 @@ With `scope="row"`, a screen reader user navigating to the "$29/mo" cell hears: 
 
 ## Semantic Page Structure
 
-Beyond lists and tables, HTML provides elements that describe the *purpose* of page sections. These are not visual elements — they are structural metadata that helps machines and assistive technology understand your layout.
+Beyond lists and tables, HTML provides elements that describe the *purpose* of page sections. These help screen readers, search engines, and other developers understand your layout.
 
 | Tag | Purpose |
 |-----|---------|
@@ -316,93 +281,22 @@ Beyond lists and tables, HTML provides elements that describe the *purpose* of p
 | `<nav>` | A section containing navigation links |
 | `<main>` | The primary content of the page (only one per page) |
 | `<section>` | A thematic grouping of content, typically with a heading |
-| `<article>` | Self-contained content that could stand alone (blog post, product card, comment) |
-| `<aside>` | Content tangentially related to the surrounding content (sidebars, callouts) |
-| `<footer>` | Closing content for a page or section (copyright, links, contact) |
+| `<article>` | Self-contained content that could stand alone (blog post, product card) |
+| `<aside>` | Tangentially related content (sidebars, callouts) |
+| `<footer>` | Closing content for a page or section (copyright, contact) |
 
-The key insight: `<header>`, `<footer>`, `<article>`, and `<section>` can be nested. A page has a `<header>`, but so can each `<article>` within the page. An `<article>` can have its own `<footer>`. These elements describe structure *relative to their context*.
+The key insight: these elements can be **nested**. A page has a `<header>`, but so can each `<article>` within it. They describe structure *relative to their context*. A screen reader user can jump directly to `<main>`, navigate between `<article>` elements, or skip to the `<footer>` — all without scrolling through everything.
 
-### A Complete Semantic Layout
+Use `<div>` only when you need a generic container for styling and no semantic element fits. The cards in a grid are `<article>` elements; the grid wrapper is a `<div>`.
 
-```svelte
-<header>
-  <h1>DevCourses</h1>
-  <nav>
-    <ul>
-      <li><a href="/">Home</a></li>
-      <li><a href="/courses">Courses</a></li>
-      <li><a href="/about">About</a></li>
-    </ul>
-  </nav>
-</header>
+## Real Example: Feature Comparison with Two-Dimensional Data
 
-<main>
-  <section>
-    <h2>Featured Courses</h2>
-
-    <article>
-      <h3>SvelteKit Fundamentals</h3>
-      <p>Learn to build modern web apps with Svelte 5 and SvelteKit.</p>
-      <footer>
-        <small>8 weeks &middot; Intermediate</small>
-      </footer>
-    </article>
-
-    <article>
-      <h3>CSS Architecture</h3>
-      <p>Master scalable CSS patterns for large applications.</p>
-      <footer>
-        <small>6 weeks &middot; Advanced</small>
-      </footer>
-    </article>
-  </section>
-
-  <aside>
-    <h2>Latest News</h2>
-    <p>Svelte 5 is now stable! Check out the new runes API.</p>
-  </aside>
-</main>
-
-<footer>
-  <p>&copy; 2025 DevCourses. All rights reserved.</p>
-  <nav>
-    <a href="/privacy">Privacy Policy</a>
-    <a href="/terms">Terms of Service</a>
-  </nav>
-</footer>
-```
-
-Compare this to a page built entirely with `<div>` tags. The semantic version communicates the entire page structure through element names alone. A screen reader user can jump directly to `<main>` to skip the header, navigate between `<article>` elements to scan courses, or jump to the page `<footer>` for legal links — all without scrolling through everything.
-
-### When to Use `<div>`
-
-Use `<div>` when you need a generic container purely for styling or layout purposes and no semantic element fits:
-
-```svelte
-<!-- Semantic: this IS navigation -->
-<nav>
-  <a href="/">Home</a>
-  <a href="/about">About</a>
-</nav>
-
-<!-- div: generic wrapper for CSS grid/flex layout -->
-<div class="card-grid">
-  <article class="card">...</article>
-  <article class="card">...</article>
-</div>
-```
-
-The `<div>` wrapping the cards has no semantic meaning — it is just a layout container. The cards themselves are `<article>` because each one is a self-contained piece of content. This is the right mix.
-
-## Real Example: A Feature List and Pricing Table
-
-Here is a realistic component combining lists, tables, and semantic structure:
+Here is a pattern you will see in real applications — a comparison table where `{#each}` handles both rows and columns:
 
 ```svelte
 <script>
   let features = $state([
     { name: 'Component Architecture', included: [true, true, true] },
-    { name: 'TypeScript Support', included: [true, true, true] },
     { name: 'SSR & Streaming', included: [false, true, true] },
     { name: 'Edge Deployment', included: [false, false, true] },
     { name: 'Priority Support', included: [false, false, true] },
@@ -411,53 +305,30 @@ Here is a realistic component combining lists, tables, and semantic structure:
   let tiers = ['Starter', 'Pro', 'Enterprise'];
 </script>
 
-<section>
-  <h2>What You Get</h2>
-
-  <ul>
-    <li>
-      <strong>Build faster</strong> — Component-based architecture
-      with hot module replacement
-    </li>
-    <li>
-      <strong>Ship smaller</strong> — Compiler-based framework with
-      no runtime overhead
-    </li>
-    <li>
-      <strong>Scale confidently</strong> — TypeScript, testing, and
-      deployment built in
-    </li>
-  </ul>
-</section>
-
-<section>
-  <h2>Compare Plans</h2>
-
-  <table>
-    <caption>Feature availability by plan tier</caption>
-    <thead>
+<table>
+  <caption>Feature availability by plan tier</caption>
+  <thead>
+    <tr>
+      <th scope="col">Feature</th>
+      {#each tiers as tier}
+        <th scope="col">{tier}</th>
+      {/each}
+    </tr>
+  </thead>
+  <tbody>
+    {#each features as feature (feature.name)}
       <tr>
-        <th scope="col">Feature</th>
-        {#each tiers as tier}
-          <th scope="col">{tier}</th>
+        <th scope="row">{feature.name}</th>
+        {#each feature.included as isIncluded}
+          <td>{isIncluded ? '✓' : '—'}</td>
         {/each}
       </tr>
-    </thead>
-    <tbody>
-      {#each features as feature (feature.name)}
-        <tr>
-          <th scope="row">{feature.name}</th>
-          {#each feature.included as isIncluded, i}
-            <td>{isIncluded ? '✓' : '—'}</td>
-          {/each}
-        </tr>
-      {/each}
-    </tbody>
-  </table>
-</section>
+    {/each}
+  </tbody>
+</table>
 ```
 
-The data structure (an array of features, each with an array of booleans matching the tier order) maps directly to the table structure (rows of features, columns of tiers). The HTML reflects the data. The `{#each}` blocks handle both dimensions cleanly.
+The data structure (an array of features, each with a boolean array matching the tier order) maps directly to the table structure. The outer `{#each}` iterates rows, the inner one iterates columns. HTML mirrors data.
 
 ## Try It
 

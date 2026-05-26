@@ -117,9 +117,9 @@ export const GET: RequestHandler = async () => {
 
 The `json()` helper from `@sveltejs/kit` creates a proper `Response` with the `Content-Type: application/json` header already set. You could build the response manually with `new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } })`, but `json()` saves you from that boilerplate.
 
-## Building a Complete CRUD API
+## Building a CRUD API
 
-Here is a full CRUD API for a todo list, demonstrating all four HTTP methods with proper input validation and error handling:
+Here is a CRUD API for a todo list with POST and DELETE, demonstrating input validation, proper status codes, and the `error()` helper:
 
 ```typescript
 // src/routes/api/todos/+server.ts
@@ -142,81 +142,35 @@ export const POST: RequestHandler = async ({ request }) => {
   const body = await request.json();
 
   // Never trust client data — validate everything
-  if (!body.title || typeof body.title !== 'string') {
-    error(400, 'Title is required and must be a string');
+  if (!body.title || typeof body.title !== 'string' || body.title.trim().length === 0) {
+    error(400, 'Title is required and must be a non-empty string');
   }
 
-  if (body.title.trim().length === 0) {
-    error(400, 'Title cannot be empty');
-  }
-
-  const todo = {
-    id: nextId++,
-    title: body.title.trim(),
-    completed: false
-  };
-
+  const todo = { id: nextId++, title: body.title.trim(), completed: false };
   todos.push(todo);
 
-  // 201 means "Created" — semantically correct for resource creation
-  return json(todo, { status: 201 });
+  return json(todo, { status: 201 }); // 201 = "Created"
 };
-```
 
-```typescript
-// src/routes/api/todos/[id]/+server.ts
-import { json, error } from '@sveltejs/kit';
-import type { RequestHandler } from './$types';
+// DELETE /api/todos — delete a todo by id (passed in body)
+export const DELETE: RequestHandler = async ({ request }) => {
+  const { id } = await request.json();
+  const index = todos.findIndex((t) => t.id === id);
 
-// PUT /api/todos/:id — update a todo
-export const PUT: RequestHandler = async ({ params, request }) => {
-  const id = Number(params.id);
-  const todoIndex = todos.findIndex((t) => t.id === id);
-
-  if (todoIndex === -1) {
+  if (index === -1) {
     error(404, `Todo with id ${id} not found`);
   }
 
-  const body = await request.json();
-
-  // Validate the fields the client is allowed to update
-  if (body.title !== undefined && typeof body.title !== 'string') {
-    error(400, 'Title must be a string');
-  }
-  if (body.completed !== undefined && typeof body.completed !== 'boolean') {
-    error(400, 'Completed must be a boolean');
-  }
-
-  todos[todoIndex] = {
-    ...todos[todoIndex],
-    ...(body.title !== undefined && { title: body.title.trim() }),
-    ...(body.completed !== undefined && { completed: body.completed })
-  };
-
-  return json(todos[todoIndex]);
-};
-
-// DELETE /api/todos/:id — delete a todo
-export const DELETE: RequestHandler = async ({ params }) => {
-  const id = Number(params.id);
-  const todoIndex = todos.findIndex((t) => t.id === id);
-
-  if (todoIndex === -1) {
-    error(404, `Todo with id ${id} not found`);
-  }
-
-  todos.splice(todoIndex, 1);
-
-  // 204 means "No Content" — the deletion succeeded, nothing to return
-  return new Response(null, { status: 204 });
+  todos.splice(index, 1);
+  return new Response(null, { status: 204 }); // 204 = "No Content"
 };
 ```
 
-A few things to notice here:
+A few principles at work here:
 
 **Input validation is non-negotiable.** The client could be a malicious user with curl, not your nice UI. Check that required fields exist, have the right type, and meet your business rules. Validate on the server even if you also validate on the client.
 
-**Status codes communicate meaning.** `200` means success. `201` means a resource was created. `204` means success with no body. `400` means the client sent bad data. `404` means the resource does not exist. Using the right status code is not pedantry — it helps clients handle responses correctly and makes debugging easier.
+**Status codes communicate meaning.** `200` means success. `201` means a resource was created. `204` means success with no body. `400` means the client sent bad data. `404` means the resource does not exist. Using the right status code helps clients handle responses correctly and makes debugging easier.
 
 **The `error()` helper throws an error response.** It sets the status code and creates a JSON body with an error message. SvelteKit catches it and returns a proper error response.
 

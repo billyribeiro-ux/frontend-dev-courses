@@ -2,9 +2,9 @@
 
 SvelteKit is not just a frontend framework — it is a full-stack platform. Beyond rendering pages, SvelteKit lets you create **API endpoints** that live right alongside your routes. These are called server routes, and they are defined in `+server.ts` files.
 
-Before we write code, let's build the right mental model. You already know that `+page.server.ts` files contain `load` functions that fetch data and hand it to a Svelte component for rendering. The component is the response. A `+server.ts` file is different: **there is no component**. The file itself IS the response. It receives an HTTP request and returns a raw `Response` object — JSON, plain text, a file download, an event stream, whatever you need. No HTML, no rendering pipeline, no hydration. Just HTTP in, HTTP out.
+Here is the mental model. You already know that `+page.server.ts` files contain `load` functions that fetch data and hand it to a Svelte component for rendering. The component is the response. A `+server.ts` file is different: **there is no component**. The file itself IS the response. It receives an HTTP request and returns a raw `Response` object — JSON, plain text, a file download, an event stream, whatever you need. No HTML, no rendering pipeline, no hydration. Just HTTP in, HTTP out.
 
-This distinction matters architecturally. When you need to feed data to your own UI, use `+page.server.ts` and let SvelteKit handle serialization and hydration. When you need a standalone HTTP endpoint — something a mobile app can call, a webhook receiver, a download URL, or an SSE stream — that's `+server.ts` territory.
+This distinction matters architecturally. Use `+page.server.ts` when you need to feed data to your own UI. Use `+server.ts` when you need a standalone HTTP endpoint — something a mobile app calls, a webhook receiver, a download URL, or an SSE stream.
 
 ## Creating a Server Route
 
@@ -26,56 +26,38 @@ Notice that the file exports a named constant, not a default export. The name **
 
 ## HTTP Methods as Named Exports
 
-A single `+server.ts` file can handle every HTTP method a resource needs:
+A single `+server.ts` file can handle every HTTP method a resource needs. You typically split across two files — one for the collection, one for individual items:
 
 ```typescript
-// src/routes/api/items/+server.ts
-import { json, error } from '@sveltejs/kit';
-import type { RequestHandler } from './$types';
-
+// src/routes/api/items/+server.ts — collection
 export const GET: RequestHandler = async () => { /* list items */ };
 export const POST: RequestHandler = async () => { /* create item */ };
 ```
 
 ```typescript
-// src/routes/api/items/[id]/+server.ts
-export const GET: RequestHandler = async () => { /* get one item */ };
-export const PUT: RequestHandler = async () => { /* replace item */ };
+// src/routes/api/items/[id]/+server.ts — individual
+export const GET: RequestHandler = async () => { /* get one */ };
+export const PUT: RequestHandler = async () => { /* replace */ };
 export const PATCH: RequestHandler = async () => { /* partial update */ };
-export const DELETE: RequestHandler = async () => { /* remove item */ };
+export const DELETE: RequestHandler = async () => { /* remove */ };
 ```
 
-Each handler receives one argument: a `RequestEvent` object. Let's look at what's inside it.
+Each handler receives one argument: a `RequestEvent` object. Let's look at what is inside it.
 
 ## RequestEvent Anatomy
 
-Every handler receives the same `RequestEvent` shape. Understanding its properties is essential — this is your interface to the entire HTTP request and the SvelteKit runtime:
+Every handler receives the same `RequestEvent` shape. This is your interface to the entire HTTP request and the SvelteKit runtime:
 
 ```typescript
 export const GET: RequestHandler = async (event) => {
-  // The raw Web API Request object. Use it for headers, body, method.
-  event.request;        // Request
-
-  // Route parameters from dynamic segments like [id] or [slug]
-  event.params;         // { id: string } for routes/api/items/[id]
-
-  // The full URL. Great for query strings.
-  event.url;            // URL object — event.url.searchParams.get('q')
-
-  // Read and write cookies — HttpOnly by default, path '/' by default
-  event.cookies;        // Cookies API — .get(), .set(), .delete()
-
-  // Shared data set by hooks (handle function in hooks.server.ts)
-  event.locals;         // App.Locals — typically { user, session }
-
-  // Adapter-specific data (Cloudflare env, Vercel edge config, etc.)
-  event.platform;       // Platform-specific context
-
-  // Fetch that preserves cookies — use for internal API calls
-  event.fetch;          // Enhanced fetch
-
-  // Set individual headers on the response
-  event.setHeaders;     // (headers: Record<string, string>) => void
+  event.request;      // The raw Web API Request — headers, body, method
+  event.params;       // Route params: { id: string } for [id] segments
+  event.url;          // Full URL object — event.url.searchParams.get('q')
+  event.cookies;      // Cookie API — .get(), .set(), .delete()
+  event.locals;       // Shared data from hooks — typically { user, session }
+  event.platform;     // Adapter-specific context (Cloudflare env, etc.)
+  event.fetch;        // Enhanced fetch that preserves cookies internally
+  event.setHeaders;   // Set response headers: (headers) => void
 
   return json({ ok: true });
 };
@@ -90,20 +72,18 @@ SvelteKit provides four helpers from `@sveltejs/kit` that cover the vast majorit
 ```typescript
 import { json, error, redirect, text } from '@sveltejs/kit';
 
-// json() — serialize an object and set Content-Type: application/json
+// json() — serialize an object, set Content-Type: application/json
 return json({ id: 1, title: 'Hello' });
 return json(created, { status: 201 });
 
-// error() — throw an HTTP error (stops execution)
+// error() — throw an HTTP error (stops execution immediately)
 throw error(404, 'Bookmark not found');
 throw error(400, { message: 'Invalid URL', field: 'url' });
 
 // redirect() — send a 3xx redirect (throw it, don't return it)
 throw redirect(303, '/login');
-throw redirect(301, '/new-location');
 
 // text() — return a plain text response
-return text('OK', { status: 200 });
 return text('pong');
 ```
 
@@ -122,7 +102,7 @@ return new Response(csvString, {
 return new Response(null, { status: 204 });
 ```
 
-Since these are standard Web `Response` objects, anything you can do with the Fetch API response works here. That's by design — SvelteKit does not invent its own abstraction layer.
+Since these are standard Web `Response` objects, anything you can do with the Fetch API response works here. SvelteKit does not invent its own abstraction layer.
 
 ## Status Codes That Matter
 
@@ -133,36 +113,28 @@ Choose the right status code. Clients, browsers, and caches all behave different
 | `200` | OK | Successful GET, PUT, PATCH |
 | `201` | Created | Successful POST that creates a resource |
 | `204` | No Content | Successful DELETE (nothing to return) |
-| `301` | Moved Permanently | Resource URL has changed forever |
-| `303` | See Other | Redirect after form submission |
 | `400` | Bad Request | Invalid input from the client |
-| `401` | Unauthorized | No valid authentication provided |
-| `403` | Forbidden | Authenticated but not permitted |
-| `404` | Not Found | Resource doesn't exist |
-| `409` | Conflict | Duplicate or state conflict |
+| `401` | Unauthorized | No valid authentication |
+| `404` | Not Found | Resource does not exist |
 | `429` | Too Many Requests | Rate limit exceeded |
-| `500` | Server Error | Unexpected failure (SvelteKit sends this if your handler throws) |
+| `500` | Server Error | Unhandled exception (SvelteKit sends this automatically) |
 
-A common mistake is returning `200` for everything and putting `{ success: false }` in the body. Don't do that. HTTP clients, error-tracking tools, caches, and retry logic all depend on status codes to do the right thing.
+A common mistake is returning `200` for everything and putting `{ success: false }` in the body. HTTP clients, error-tracking tools, and retry logic all depend on status codes.
 
 ## Setting Response Headers
 
-Use the second argument of `json()` or construct a `Response` to set headers:
+Use the second argument of `json()` to set headers like `Cache-Control`, or construct a `Response` for full control:
 
 ```typescript
 export const GET: RequestHandler = async () => {
   const data = await fetchExpensiveData();
-
   return json(data, {
-    headers: {
-      // Cache for 60 seconds, revalidate for up to 5 minutes
-      'Cache-Control': 'public, max-age=60, stale-while-revalidate=300'
-    }
+    headers: { 'Cache-Control': 'public, max-age=60, stale-while-revalidate=300' }
   });
 };
 ```
 
-For CORS (Cross-Origin Resource Sharing), you need to handle preflight `OPTIONS` requests and set the right headers on every response:
+For CORS, handle preflight `OPTIONS` requests and include the headers on every response:
 
 ```typescript
 const corsHeaders = {
@@ -172,21 +144,19 @@ const corsHeaders = {
 };
 
 export const OPTIONS: RequestHandler = async () => {
-  // Preflight requests get just the headers, no body
   return new Response(null, { headers: corsHeaders });
 };
 
 export const GET: RequestHandler = async () => {
-  const data = await getBookmarks();
-  return json(data, { headers: corsHeaders });
+  return json(await getBookmarks(), { headers: corsHeaders });
 };
 ```
 
-If you find yourself adding CORS headers everywhere, move them into a `handle` hook in `hooks.server.ts` where they apply globally. Don't scatter them across every endpoint.
+If you find yourself repeating CORS headers across endpoints, move them into a `handle` hook in `hooks.server.ts` instead.
 
 ## A Complete Bookmarks API
 
-Let's build something real. A bookmarks CRUD API with proper validation, error handling, and authentication. This is the kind of endpoint a browser extension, a mobile app, or a third-party integration would call.
+A bookmarks CRUD API with validation, error handling, and authentication — the kind of endpoint a browser extension or mobile app would call.
 
 ```typescript
 // src/routes/api/bookmarks/+server.ts
@@ -197,9 +167,7 @@ import { bookmarks } from '$lib/server/schema';
 import { eq } from 'drizzle-orm';
 
 function requireAuth(locals: App.Locals) {
-  if (!locals.user) {
-    throw error(401, 'Authentication required');
-  }
+  if (!locals.user) throw error(401, 'Authentication required');
   return locals.user;
 }
 
@@ -207,43 +175,29 @@ function validateBookmark(body: unknown): { url: string; title: string } {
   if (!body || typeof body !== 'object') {
     throw error(400, 'Request body must be a JSON object');
   }
-
   const { url, title } = body as Record<string, unknown>;
 
-  if (!url || typeof url !== 'string') {
-    throw error(400, 'URL is required');
-  }
-
-  try {
-    new URL(url); // validates URL format
-  } catch {
-    throw error(400, 'Invalid URL format');
-  }
+  if (!url || typeof url !== 'string') throw error(400, 'URL is required');
+  try { new URL(url); } catch { throw error(400, 'Invalid URL format'); }
 
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     throw error(400, 'Title is required');
   }
-
-  if (title.length > 500) {
-    throw error(400, 'Title must be 500 characters or fewer');
-  }
+  if (title.length > 500) throw error(400, 'Title must be 500 characters or fewer');
 
   return { url: url.trim(), title: title.trim() };
 }
 
-// List all bookmarks for the authenticated user
+// List bookmarks for the authenticated user
 export const GET: RequestHandler = async ({ locals, url }) => {
   const user = requireAuth(locals);
-
   const limit = Math.min(Number(url.searchParams.get('limit')) || 20, 100);
   const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0);
 
   const results = await db
-    .select()
-    .from(bookmarks)
+    .select().from(bookmarks)
     .where(eq(bookmarks.userId, user.id))
-    .limit(limit)
-    .offset(offset);
+    .limit(limit).offset(offset);
 
   return json(results);
 };
@@ -251,8 +205,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 // Create a new bookmark
 export const POST: RequestHandler = async ({ request, locals }) => {
   const user = requireAuth(locals);
-  const body = await request.json();
-  const { url, title } = validateBookmark(body);
+  const { url, title } = validateBookmark(await request.json());
 
   const [created] = await db
     .insert(bookmarks)
@@ -263,183 +216,86 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 };
 ```
 
-```typescript
-// src/routes/api/bookmarks/[id]/+server.ts
-import { json, error } from '@sveltejs/kit';
-import type { RequestHandler } from './$types';
-import { db } from '$lib/server/db';
-import { bookmarks } from '$lib/server/schema';
-import { eq, and } from 'drizzle-orm';
+The individual item endpoint at `src/routes/api/bookmarks/[id]/+server.ts` follows the same pattern — `GET`, `PUT`, and `DELETE` handlers that each call `requireAuth`, validate `params.id`, and scope the database query with `and(eq(bookmarks.id, id), eq(bookmarks.userId, user.id))`. The `and()` clause is critical: it prevents users from accessing each other's data by baking authorization into the query itself. We will build that file in the next lesson on REST patterns.
 
-function requireAuth(locals: App.Locals) {
-  if (!locals.user) {
-    throw error(401, 'Authentication required');
-  }
-  return locals.user;
-}
-
-// Get a single bookmark
-export const GET: RequestHandler = async ({ params, locals }) => {
-  const user = requireAuth(locals);
-
-  const [bookmark] = await db
-    .select()
-    .from(bookmarks)
-    .where(and(eq(bookmarks.id, Number(params.id)), eq(bookmarks.userId, user.id)));
-
-  if (!bookmark) {
-    throw error(404, 'Bookmark not found');
-  }
-
-  return json(bookmark);
-};
-
-// Update a bookmark
-export const PUT: RequestHandler = async ({ params, request, locals }) => {
-  const user = requireAuth(locals);
-  const body = await request.json();
-
-  // Validate the ID is a number, not arbitrary input
-  const id = Number(params.id);
-  if (Number.isNaN(id)) {
-    throw error(400, 'Invalid bookmark ID');
-  }
-
-  const [updated] = await db
-    .update(bookmarks)
-    .set({ url: body.url, title: body.title })
-    .where(and(eq(bookmarks.id, id), eq(bookmarks.userId, user.id)))
-    .returning();
-
-  if (!updated) {
-    throw error(404, 'Bookmark not found');
-  }
-
-  return json(updated);
-};
-
-// Delete a bookmark
-export const DELETE: RequestHandler = async ({ params, locals }) => {
-  const user = requireAuth(locals);
-
-  const id = Number(params.id);
-  if (Number.isNaN(id)) {
-    throw error(400, 'Invalid bookmark ID');
-  }
-
-  const [deleted] = await db
-    .delete(bookmarks)
-    .where(and(eq(bookmarks.id, id), eq(bookmarks.userId, user.id)))
-    .returning();
-
-  if (!deleted) {
-    throw error(404, 'Bookmark not found');
-  }
-
-  return new Response(null, { status: 204 });
-};
-```
-
-Notice the pattern: every handler checks authentication, validates input, scopes queries to the current user, and returns the right status code. The `and()` clause in the WHERE prevents users from accessing each other's bookmarks — authorization baked into the query itself.
+Every handler follows the same rhythm: authenticate, validate, scope to user, return the right status code.
 
 ## Authentication in API Routes
 
-Authentication typically flows through hooks. Here's how the pieces connect:
+Authentication flows through hooks into `locals`. Your `hooks.server.ts` parses a session cookie and attaches user data to `event.locals` before any route handler runs:
 
 ```typescript
 // src/hooks.server.ts
-import type { Handle } from '@sveltejs/kit';
-import { verifySessionToken } from '$lib/server/auth';
-
 export const handle: Handle = async ({ event, resolve }) => {
   const token = event.cookies.get('session');
-
   if (token) {
-    const user = await verifySessionToken(token);
-    event.locals.user = user; // null if token is invalid
+    event.locals.user = await verifySessionToken(token);
   }
-
   return resolve(event);
 };
 ```
 
-By the time any `+server.ts` handler runs, `locals.user` is either populated or `null`. Your API routes never parse cookies or verify tokens directly — that logic lives in one place, the hook.
-
-For API endpoints consumed by external clients (not your own browser pages), you'll often use Bearer tokens instead of cookies:
+Your API routes never parse cookies or verify tokens directly — that logic lives in one place, the hook. For external consumers that can't use browser cookies, support Bearer tokens as a fallback:
 
 ```typescript
 function requireApiAuth(request: Request, locals: App.Locals) {
-  // First check cookie-based auth (from hooks)
   if (locals.user) return locals.user;
 
-  // Fall back to Bearer token for API consumers
   const auth = request.headers.get('Authorization');
   if (!auth?.startsWith('Bearer ')) {
     throw error(401, 'Missing or invalid Authorization header');
   }
-
-  const apiKey = auth.slice(7);
-  const user = validateApiKey(apiKey); // your implementation
-
-  if (!user) {
-    throw error(401, 'Invalid API key');
-  }
-
+  const user = validateApiKey(auth.slice(7));
+  if (!user) throw error(401, 'Invalid API key');
   return user;
 }
 ```
 
 ## Rate Limiting and Security
 
-API endpoints exposed to the internet need protection. Here are the essentials:
-
-**Rate limiting** is best done at the infrastructure level (Cloudflare, nginx, a reverse proxy), but you can implement basic in-memory limiting for development or low-traffic apps:
+API endpoints exposed to the internet need protection beyond authentication. **Rate limiting** is best handled at the infrastructure level (Cloudflare, nginx), but here is a basic in-memory approach for low-traffic apps:
 
 ```typescript
 // src/lib/server/rate-limit.ts
+import { error } from '@sveltejs/kit';
 const hits = new Map<string, { count: number; resetAt: number }>();
 
 export function rateLimit(ip: string, limit = 60, windowMs = 60_000): void {
   const now = Date.now();
   const record = hits.get(ip);
-
   if (!record || now > record.resetAt) {
     hits.set(ip, { count: 1, resetAt: now + windowMs });
     return;
   }
-
   record.count++;
-  if (record.count > limit) {
-    throw error(429, 'Too many requests. Please try again later.');
-  }
+  if (record.count > limit) throw error(429, 'Too many requests');
 }
 ```
 
-**Other security considerations** for production API routes:
+Other production security essentials:
 
-- **Validate Content-Type**: Before calling `request.json()`, check that the Content-Type header is `application/json`. A malformed request will throw otherwise.
-- **Limit body size**: SvelteKit doesn't limit request bodies by default. Configure your adapter or reverse proxy to cap request sizes.
-- **Sanitize output**: Don't leak internal error messages, stack traces, or database column names to clients. In production, return generic messages.
-- **CSRF protection**: SvelteKit's form actions have built-in CSRF protection, but `+server.ts` endpoints do not. If your API accepts cookie-based auth from browsers, verify the `Origin` header matches your domain.
+- **Validate Content-Type** before calling `request.json()` — malformed requests will throw.
+- **Limit body size** via your adapter or reverse proxy. SvelteKit does not cap request bodies by default.
+- **Sanitize output** — never leak stack traces or internal column names to clients.
+- **CSRF protection** — `+server.ts` endpoints do not have it built in (form actions do). If your API accepts cookie-based auth from browsers, verify the `Origin` header matches your domain.
 
 ## When to Use `+server.ts` vs `+page.server.ts`
 
-This decision comes up constantly. Here's the framework:
+This decision comes up constantly. Here is the framework:
 
 **Use `+page.server.ts`** (load functions and form actions) when:
 - The data feeds your own SvelteKit pages
 - You want SvelteKit to handle serialization, streaming, and hydration
 - You need progressive enhancement on forms (works without JavaScript)
-- You don't need external consumers to call this endpoint
 
 **Use `+server.ts`** when:
-- External clients need the endpoint (mobile apps, browser extensions, third-party integrations)
-- You're receiving webhooks from services like Stripe or GitHub
-- You need to return non-HTML responses (CSV, PDF, images, file downloads)
-- You're implementing Server-Sent Events (SSE) or streaming responses
+- External clients need the endpoint (mobile apps, browser extensions, integrations)
+- You are receiving webhooks from services like Stripe or GitHub
+- You need non-HTML responses (CSV, PDF, images, file downloads)
+- You are implementing Server-Sent Events or streaming responses
 - You need full control over the response (custom headers, status codes, content types)
 
-The common mistake? Building an internal JSON API with `+server.ts` and then calling it from your own `load` functions with `fetch`. That's extra work for no benefit — SvelteKit already provides a direct data pipeline through `+page.server.ts`. Save the API layer for when you genuinely need HTTP as the interface.
+The common mistake? Building an internal JSON API with `+server.ts` and then calling it from your own `load` functions with `fetch`. That is extra work for no benefit — SvelteKit already provides a direct data pipeline through `+page.server.ts`. Save the API layer for when you genuinely need HTTP as the interface.
 
 ## Try It
 

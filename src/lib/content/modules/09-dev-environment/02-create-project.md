@@ -60,6 +60,8 @@ TypeScript is not optional decoration. It is the single biggest productivity mul
 
 For this course, select **Prettier** and **ESLint** at minimum. Add **Vitest** if you want to write unit tests as you learn.
 
+These tools work together to form a quality pipeline. Prettier handles formatting (how code looks), ESLint handles correctness (whether code follows best practices), and TypeScript handles types (whether data flows correctly). When you save a file, Prettier formats it. When you run `npm run lint`, ESLint scans for problems. When you run `npm run check`, TypeScript and Svelte's type checker analyze your entire project. Each tool catches a different category of mistake, and together they catch almost everything before it reaches a user.
+
 ## Installing Dependencies
 
 Once scaffolding is complete, move into your project and install dependencies:
@@ -118,6 +120,8 @@ Here is the flow:
 5. The browser replaces the old module with the new one _in place_, preserving component state.
 
 That last point is critical. If you have a counter at 5 and you change the button's color, the counter stays at 5. The page does not reload. Your form inputs are not cleared. Your scroll position is preserved. HMR makes the feedback loop between writing code and seeing results nearly instantaneous, which fundamentally changes how you develop.
+
+To appreciate why this matters, consider the alternative. Without HMR, every change requires a full page reload: the browser discards all JavaScript state, re-fetches the page, re-parses the HTML, and re-executes all your scripts. If you were filling out a multi-step form and tweaking the third step's styling, you would have to click through steps one and two after every single save. With HMR, you stay exactly where you are. The cost of experimenting drops to near zero, which encourages you to experiment more — and experimenting more is how you learn faster.
 
 ## Your First Modification
 

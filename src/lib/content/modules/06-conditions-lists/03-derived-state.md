@@ -216,6 +216,25 @@ There are patterns that require `$derived.by()` because they cannot be expressed
     }
     return [...bins.entries()].sort((a, b) => a[0] - b[0]);
   });
+
+  // Password strength calculator
+  let password = $state('');
+
+  let strength = $derived.by(() => {
+    if (password.length === 0) return { label: 'Empty', score: 0, color: '#ccc' };
+    if (password.length < 6) return { label: 'Weak', score: 1, color: '#ef4444' };
+
+    let score = 0;
+    if (password.length >= 8) score++;
+    if (password.length >= 12) score++;
+    if (/[A-Z]/.test(password)) score++;
+    if (/[0-9]/.test(password)) score++;
+    if (/[^A-Za-z0-9]/.test(password)) score++;
+
+    if (score <= 2) return { label: 'Fair', score: 2, color: '#f97316' };
+    if (score <= 3) return { label: 'Good', score: 3, color: '#eab308' };
+    return { label: 'Strong', score: 4, color: '#22c55e' };
+  });
 </script>
 ```
 
@@ -290,6 +309,30 @@ The golden rule: **if you are computing a value, use `$derived`. If you are doin
 
 Using `$effect` to synchronize one piece of state with another creates a second source of truth and can cause timing bugs -- the effect runs after the DOM updates, meaning there is a brief moment where `count` is stale. `$derived` has no such gap; it is always consistent.
 
+### Why the $effect Anti-Pattern Is Dangerous
+
+```svelte
+<script>
+  let items = $state([10, 20, 30]);
+
+  // ANTI-PATTERN: Using $effect to compute a derived value
+  let total = $state(0);
+  $effect(() => {
+    total = items.reduce((sum, n) => sum + n, 0);
+  });
+
+  // Problems:
+  // 1. Double render: Svelte renders with total=0, then effect sets total=60, renders again
+  // 2. Timing gap: Between first render and effect, the UI shows stale data
+  // 3. Infinite loop risk: If effect sets state that triggers itself
+  // 4. Harder to reason about: two sources of truth for one value
+
+  // CORRECT: Use $derived
+  let totalCorrect = $derived(items.reduce((sum, n) => sum + n, 0));
+  // No double render. No timing gap. Always consistent.
+</script>
+```
+
 ## Common Mistakes
 
 ### Mistake 1: Mutating Inside $derived
@@ -306,7 +349,7 @@ Using `$effect` to synchronize one piece of state with another creates a second 
 </script>
 ```
 
-Array methods like `.sort()` and `.reverse()` mutate in place. Always spread `[...array]` before using them in a derived expression. If you forget, you silently corrupt your source data.
+Array methods like `.sort()` and `.reverse()` mutate in place. Always spread `[...array]` before using them in a derived expression. If you forget, you silently corrupt your source data. Modern JavaScript provides `.toSorted()` and `.toReversed()` which return new arrays without mutation -- use these if your target supports them (modern browsers, Node 20+).
 
 ### Mistake 2: Assigning to $derived
 
@@ -321,7 +364,16 @@ Array methods like `.sort()` and `.reverse()` mutate in place. Always spread `[.
 </script>
 ```
 
-If you need a value that can be both computed and overridden, that is a different pattern. Use `$state` with a reset mechanism instead.
+If you need a value that can be both computed and overridden, use a state+derived pattern:
+
+```svelte
+<script>
+  let price = $state(100);
+  let taxOverride = $state<number | null>(null);
+  let calculatedTax = $derived(price * 0.08);
+  let tax = $derived(taxOverride ?? calculatedTax);
+</script>
+```
 
 ### Mistake 3: Assuming $derived Runs Immediately
 

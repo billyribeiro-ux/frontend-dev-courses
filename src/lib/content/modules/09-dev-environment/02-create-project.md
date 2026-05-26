@@ -381,6 +381,32 @@ Click the button a few times. Open the browser console -- you will see the effec
 
 This is the power of the runes system combined with HMR -- your reactive graph updates surgically without losing state.
 
+## Stopping the Dev Server
+
+To stop the dev server, press `Ctrl+C` in the terminal. This sends a SIGINT signal to the process, which Vite handles gracefully by cleaning up and exiting.
+
+A common mistake is to close the terminal window without stopping the server. The process keeps running in the background, consuming resources and holding the port. If you accidentally do this:
+
+```bash
+# Find and kill orphaned Vite processes
+# macOS/Linux
+lsof -i :5173 | grep LISTEN
+kill <PID>
+
+# Or if you know it is a node process
+pkill -f "vite dev"
+```
+
+For professional development, you will typically have multiple terminal panes open:
+
+```
+Terminal 1:  npm run dev          (dev server -- always running)
+Terminal 2:  npm run check:watch  (continuous type checking)
+Terminal 3:  general commands     (git, npm install, etc.)
+```
+
+VS Code's integrated terminal supports split panes (Ctrl+Shift+5), making this workflow natural.
+
 ## Understanding the Build Pipeline
 
 When you eventually run `npm run build` for production, an entirely different pipeline kicks in:
@@ -458,6 +484,44 @@ SvelteKit loads environment variables from multiple files, with a specific prece
 
 The `.local` files are automatically gitignored by `sv create`. This is the correct pattern: commit safe defaults, override locally with secrets.
 
+## Adding Tailwind CSS v4
+
+Most SvelteKit projects use Tailwind CSS for styling. Add it immediately after creating your project:
+
+```bash
+npx sv add tailwindcss
+```
+
+This creates a `src/app.css` file with the Tailwind import and sets up the necessary configuration. Tailwind CSS v4 uses a fundamentally different configuration approach than v3:
+
+```css
+/* src/app.css -- Tailwind v4 syntax */
+@import 'tailwindcss';
+
+@theme {
+  --color-primary: #3b82f6;
+  --color-secondary: #10b981;
+  --font-sans: 'Inter', sans-serif;
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+}
+```
+
+```
+# WRONG (Tailwind v3 pattern -- do NOT use with v4):
+# Creating tailwind.config.js with module.exports
+# Using @tailwind base/components/utilities directives
+# Configuring content paths in the config file
+
+# CORRECT (Tailwind v4 pattern):
+# Using @import 'tailwindcss' in your CSS file
+# Using @theme directive for design tokens
+# Configuration lives in CSS, not in JavaScript
+```
+
+Tailwind v4 eliminates the separate configuration file entirely. Your design tokens are CSS custom properties defined with `@theme`, which means your styling configuration lives in the same language as your styles. This is a significant architectural simplification.
+
 ## Common Issues and How to Fix Them
 
 ### Port 5173 is already in use
@@ -509,6 +573,18 @@ npm install
 ### Node version mismatch warnings
 
 SvelteKit requires Node.js 18.13 or later. If you see version warnings, upgrade Node.js. If you are using a version manager, run `fnm install 22` or `nvm install 22` and switch to it.
+
+You can check your current Node.js version at any time:
+
+```bash
+node --version
+# v22.x.x  (good -- current LTS)
+
+npm --version
+# 10.x.x
+```
+
+Use even-numbered Node.js versions (18, 20, 22) for production. Odd-numbered versions are "current" releases with shorter support windows and are not recommended for production use.
 
 ### TypeScript errors on fresh project
 
@@ -599,6 +675,116 @@ git commit -m "Initial SvelteKit project scaffold"
 # git diff shows exactly what you changed from the baseline.
 # If something breaks, you can compare against the clean scaffold.
 ```
+
+## Understanding `svelte.config.js`
+
+The scaffolding tool creates a `svelte.config.js` file that controls how SvelteKit behaves. Understanding its options early prevents confusion later:
+
+```javascript
+import adapter from '@sveltejs/adapter-auto';
+import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
+
+/** @type {import('@sveltejs/kit').Config} */
+const config = {
+  // Preprocess lets Svelte understand TypeScript, SCSS, etc.
+  preprocess: vitePreprocess(),
+
+  kit: {
+    // The adapter determines where/how the app is deployed
+    adapter: adapter()
+  }
+};
+
+export default config;
+```
+
+**`adapter`** is the most important option. It controls how SvelteKit packages your app for deployment. `adapter-auto` detects your deployment target automatically (Vercel, Netlify, Cloudflare), but for production you should use a specific adapter:
+
+```javascript
+// For Node.js server deployment
+import adapter from '@sveltejs/adapter-node';
+
+// For static site generation (no server needed)
+import adapter from '@sveltejs/adapter-static';
+
+// For Vercel specifically
+import adapter from '@sveltejs/adapter-vercel';
+```
+
+```
+# WRONG: Leaving adapter-auto in production
+# It works, but it is implicit. If your CI environment differs from
+# your deployment target, adapter-auto might choose the wrong adapter.
+
+# CORRECT: Explicitly set the adapter for your deployment target
+# This makes the deployment strategy visible and intentional.
+```
+
+**`preprocess`** is what lets you write TypeScript in `<script lang="ts">` blocks. Without it, the Svelte compiler would choke on TypeScript syntax because Svelte only natively understands JavaScript. The preprocessor runs first, converts TypeScript to JavaScript, then hands the result to the Svelte compiler.
+
+## Understanding `vite.config.ts`
+
+The `vite.config.ts` file configures Vite, the build tool underneath SvelteKit:
+
+```typescript
+import { sveltekit } from '@sveltejs/kit/vite';
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  plugins: [sveltekit()]
+});
+```
+
+This is minimal by design. The `sveltekit()` plugin handles most configuration automatically -- it registers the Svelte compiler, sets up file-based routing, configures SSR, and manages the dev server. You add to this file when you need Vite-specific features:
+
+```typescript
+export default defineConfig({
+  plugins: [sveltekit()],
+
+  server: {
+    port: 3000,           // Fixed port instead of 5173
+    open: true,           // Auto-open browser on dev start
+    host: true            // Expose to network (useful for mobile testing)
+  },
+
+  // Optimize specific dependencies
+  optimizeDeps: {
+    include: ['lodash-es'] // Pre-bundle for faster dev startup
+  }
+});
+```
+
+The key insight: most of the time you do not need to touch this file. SvelteKit's Vite plugin handles the complexity. Only add configuration when you have a specific need -- a custom port, proxy for API development, or dependency optimization hints.
+
+## The `npm run` Scripts
+
+The `package.json` contains several scripts that drive your development workflow. Understanding each one prevents the "which command do I run?" confusion:
+
+```json
+{
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "lint": "prettier --check . && eslint .",
+    "format": "prettier --write ."
+  }
+}
+```
+
+```
+dev        → Start the development server with HMR
+build      → Compile and optimize for production
+preview    → Serve the production build locally (test before deploying)
+check      → Run TypeScript and Svelte type checking (catches type errors)
+check:watch → Same as check but re-runs on file changes
+lint       → Verify formatting and code quality without changing files
+format     → Auto-fix formatting issues across all files
+```
+
+The `preview` command is especially useful and often overlooked. After running `npm run build`, run `npm run preview` to serve the production build locally. This catches issues that only appear in production mode -- for example, missing environment variables, SSR-only code that breaks during prerendering, or assets that were tree-shaken incorrectly. Always preview before deploying.
 
 ## Try It
 

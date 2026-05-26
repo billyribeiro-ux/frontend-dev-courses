@@ -1,92 +1,76 @@
 # Layouts, Auth Pages & Error Handling
 
-TeamBoard has two distinct sections: public pages (login, signup, marketing) and the authenticated app (dashboard, boards, settings). Layout groups let you give each section its own layout without nesting one inside the other. This lesson builds the layout system, authentication pages, View Transitions, and custom error pages.
+TeamBoard has two distinct sections: public pages (login, signup, marketing) and the authenticated app (dashboard, boards, settings). Layout groups let you give each section its own layout without nesting one inside the other. This lesson builds the complete layout system, authentication pages, View Transitions, comprehensive error handling at multiple levels, loading states during navigation, and custom error classes — the production-grade foundation every multi-section SvelteKit application needs.
 
-Understanding layouts at a deep level is critical because layout architecture is one of the first decisions that shapes your entire application. Get it wrong and you end up fighting the framework — wrapping pages in conditional `{#if}` blocks, duplicating navigation components, and creating brittle auth checks scattered across pages. Get it right and the framework works for you — every new page automatically inherits the correct layout, auth protection, and error handling.
+## Layout Groups
 
-## Layout Groups: The Mental Model
+SvelteKit's layout groups solve a fundamental routing problem: how do you give different sections of your app completely different layouts without nesting one inside the other? The login page should be a clean, centered card with no sidebar. The dashboard should have a sidebar, header, and breadcrumbs. But both live under the same domain, and you do not want the dashboard layout wrapping the login page.
 
-The key insight behind layout groups is that **URL structure and layout structure are independent concerns.** You might want `/login` and `/dashboard` at the same URL depth, but with completely different visual shells. Without layout groups, SvelteKit would nest them under the same layout or force you to use awkward workarounds.
-
-Layout groups solve this with parentheses in directory names. The parenthesized name is stripped from the URL but still creates a layout boundary:
+Layout groups use parentheses in the folder name: `(auth)` and `(app)`. The parentheses tell SvelteKit two things: (1) this directory creates a layout boundary — it gets its own `+layout.svelte`, and (2) the directory name does NOT appear in the URL. The URL `/login` maps to `(auth)/login/+page.svelte`, and `/dashboard` maps to `(app)/dashboard/+page.svelte`.
 
 ```
 src/routes/
 ├── (auth)/
 │   ├── +layout.svelte      ← minimal centered layout
-│   ├── login/+page.svelte   ← URL: /login (not /auth/login)
-│   └── signup/+page.svelte  ← URL: /signup (not /auth/signup)
+│   ├── +layout.ts           ← page options for auth pages
+│   ├── login/
+│   │   ├── +page.svelte
+│   │   └── +page.server.ts
+│   ├── signup/
+│   │   ├── +page.svelte
+│   │   └── +page.server.ts
+│   └── forgot-password/
+│       ├── +page.svelte
+│       └── +page.server.ts
 ├── (app)/
 │   ├── +layout.svelte      ← full app shell with sidebar
-│   ├── +layout.server.ts   ← auth guard (protects ALL routes in this group)
-│   ├── dashboard/+page.svelte  ← URL: /dashboard
+│   ├── +layout.server.ts   ← auth guard — protects ALL routes in this group
+│   ├── +error.svelte        ← app-level error page (inherits the sidebar)
+│   ├── dashboard/+page.svelte
+│   ├── settings/
+│   │   ├── +layout.svelte   ← settings sub-layout with tabs
+│   │   ├── profile/+page.svelte
+│   │   ├── team/+page.svelte
+│   │   └── billing/+page.svelte
 │   └── [teamSlug]/
-│       ├── +page.svelte        ← URL: /acme-corp
+│       ├── +layout.svelte   ← team-specific layout with team header
+│       ├── +layout.server.ts ← team membership check
+│       ├── +error.svelte     ← team-level error page
+│       ├── +page.svelte
 │       └── boards/
-│           └── +page.svelte    ← URL: /acme-corp/boards
-├── (marketing)/
-│   ├── +layout.svelte      ← marketing layout with CTA header
-│   ├── pricing/+page.svelte ← URL: /pricing
-│   └── features/+page.svelte ← URL: /features
-├── +layout.svelte           ← root layout (shared by ALL groups)
-├── +error.svelte            ← root error page
-└── +page.svelte             ← marketing landing page (no group)
+│           ├── +page.svelte
+│           └── [boardId]/+page.svelte
+├── +layout.svelte           ← root layout (shared by ALL pages)
+├── +error.svelte            ← root error page (fallback for all errors)
+└── +page.svelte             ← marketing landing page
 ```
 
-The parentheses in `(auth)`, `(app)`, and `(marketing)` tell SvelteKit these are layout groups — they create layout boundaries without adding path segments. The URL `/login` maps to `(auth)/login/+page.svelte`, and `/dashboard` maps to `(app)/dashboard/+page.svelte`. The user never sees "auth" or "app" in their browser URL.
+This hierarchy creates three levels of error pages and four levels of layouts. Understanding how SvelteKit walks this tree — for both rendering and error handling — is the key to building maintainable multi-section applications.
 
-### Layout Hierarchy
+### How Layout Nesting Works
 
-Understanding how layouts nest is critical for debugging:
-
-```
-Root Layout (+layout.svelte)
-├── (auth) Layout (+layout.svelte)
-│   └── Page content (login, signup)
-├── (app) Layout (+layout.svelte)
-│   └── Page content (dashboard, boards)
-├── (marketing) Layout (+layout.svelte)
-│   └── Page content (pricing, features)
-└── Root page (no group layout, just root layout)
-```
-
-Every page renders inside its group layout, which renders inside the root layout. The root layout always wraps everything — it is the outermost shell. This is where you put things that are truly global: View Transitions, analytics scripts, global styles, `<meta>` tags.
-
-### WRONG vs CORRECT: Layout Architecture
+Every page inherits ALL layouts above it in the file tree. For a page at `(app)/[teamSlug]/boards/[boardId]/+page.svelte`, SvelteKit renders:
 
 ```
-WRONG: Using conditional rendering instead of layout groups
-──────────────────────────────────────────────────────────
-src/routes/
-├── +layout.svelte  ← one layout with {#if isAuthenticated} ... {:else} ...
-├── login/+page.svelte
-├── dashboard/+page.svelte
-└── settings/+page.svelte
-
-Problem: The layout component grows into a monster of conditional logic.
-Every new page type adds another branch. Auth checks are scattered.
-The sidebar component re-mounts on every navigation even when it shouldn't.
-
-CORRECT: Using layout groups
-──────────────────────────────────────────────────────────
-src/routes/
-├── (auth)/+layout.svelte       ← clean, focused, minimal
-├── (app)/+layout.svelte        ← clean, focused, with sidebar
-├── (marketing)/+layout.svelte  ← clean, focused, with CTA
-└── +layout.svelte              ← root: only truly global concerns
-
-Each layout is simple and single-purpose. No conditionals.
++layout.svelte (root)
+  └── (app)/+layout.svelte (app shell)
+       └── (app)/[teamSlug]/+layout.svelte (team header)
+            └── (app)/[teamSlug]/boards/[boardId]/+page.svelte (the page)
 ```
+
+Each layout renders its `children` snippet, which contains the next layout or page in the chain. The root layout wraps everything. The app layout adds the sidebar. The team layout adds the team header. The page fills in the content.
+
+This nesting is automatic — you do not wire it up manually. SvelteKit determines the layout chain based on the file system hierarchy and renders them in order.
 
 ## Root Layout with View Transitions
 
-The root layout wraps everything. It sets up View Transitions so page navigations animate smoothly:
+The root layout wraps every page in the application. It is the place for global concerns: View Transitions, the viewport meta tag, global fonts, and analytics:
 
 ```svelte
 <!-- src/routes/+layout.svelte -->
 <script lang="ts">
-  import '../app.css';
   import { onNavigate } from '$app/navigation';
+  import '../app.css';
 
   let { children } = $props();
 
@@ -105,31 +89,19 @@ The root layout wraps everything. It sets up View Transitions so page navigation
 
 <svelte:head>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#4f46e5" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
 </svelte:head>
 
 {@render children()}
 ```
 
-### How View Transitions Work
+`onNavigate` fires for every client-side navigation. By returning a promise that resolves inside `startViewTransition`, the old page snapshot crossfades into the new page. This works for all navigations across the app — between auth pages and app pages alike.
 
-`onNavigate` fires for every client-side navigation. By returning a promise that resolves inside `startViewTransition`, the old page snapshot crossfades into the new page. Here is the sequence:
+### How View Transitions Work Under the Hood
 
-```
-1. User clicks a link
-2. onNavigate fires BEFORE navigation starts
-3. startViewTransition captures a screenshot of the current page
-4. resolve() tells SvelteKit to proceed with the navigation
-5. SvelteKit swaps the DOM (new page renders)
-6. navigation.complete resolves when the new page is ready
-7. The browser crossfades from the screenshot to the new DOM
-```
+The View Transitions API captures a "screenshot" of the current state, applies the DOM changes (the new page), and then crossfades between the old screenshot and the new live DOM. The browser handles the animation in the compositor — it is smooth even on low-end devices because it does not run on the main thread.
 
-This works for all navigations across the app — between auth pages and app pages alike. The entire transition is CSS-driven, so it is smooth and performant.
-
-**Important:** `onNavigate` only fires for client-side navigations. Full-page loads (direct URL entry, hard refresh) do not trigger it. This is correct behavior — you only want the crossfade animation between pages the user is clicking between.
-
-Add the CSS for the view transition:
+The CSS that controls the transition:
 
 ```css
 /* src/app.css */
@@ -146,44 +118,29 @@ Add the CSS for the view transition:
 ::view-transition-new(root) {
   animation: 150ms ease-in fade-in;
 }
+
+/* Named transitions for specific elements (e.g., hero images) */
+::view-transition-old(hero-image) {
+  animation: 200ms ease-out both fade-out;
+}
+::view-transition-new(hero-image) {
+  animation: 200ms ease-in both fade-in;
+}
 ```
 
-### Customizing Transitions Per Element
-
-You can give specific elements their own transition names for more sophisticated animations:
+You can assign view transition names to specific elements for element-level transitions (morphing a thumbnail into a full-size image):
 
 ```svelte
-<!-- The sidebar stays in place while content crossfades -->
-<aside style="view-transition-name: sidebar;">
-  <!-- Sidebar content -->
-</aside>
-
-<main style="view-transition-name: content;">
-  {@render children()}
-</main>
+<img
+  src={product.image}
+  alt={product.name}
+  style="view-transition-name: hero-image;"
+/>
 ```
-
-```css
-/* Sidebar does not animate (it persists across navigations) */
-::view-transition-old(sidebar),
-::view-transition-new(sidebar) {
-  animation: none;
-}
-
-/* Content area crossfades */
-::view-transition-old(content) {
-  animation: 150ms ease-out fade-out;
-}
-::view-transition-new(content) {
-  animation: 200ms ease-in fade-in;
-}
-```
-
-This creates a more polished experience: the sidebar stays rock-solid while only the main content area transitions. Users perceive this as faster because the stable sidebar provides a visual anchor.
 
 ## Auth Layout (Centered, Minimal)
 
-The auth layout is a simple centered card — no sidebar, no header. Its only job is to center the login/signup form:
+The auth layout is a simple centered card — no sidebar, no header:
 
 ```svelte
 <!-- src/routes/(auth)/+layout.svelte -->
@@ -199,249 +156,280 @@ The auth layout is a simple centered card — no sidebar, no header. Its only jo
 
 <div class="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-4">
   <div class="w-full max-w-md">
-    <!-- App logo/name — links back to the marketing landing page -->
-    <a href="/" class="block text-center mb-8">
-      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
-        {PUBLIC_APP_NAME}
-      </h1>
-    </a>
-    {@render children()}
+    <div class="text-center mb-8">
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">{PUBLIC_APP_NAME}</h1>
+      <p class="text-sm text-gray-500 mt-1">Collaborative project management</p>
+    </div>
+
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 sm:p-8">
+      {@render children()}
+    </div>
   </div>
 </div>
 ```
 
-Notice how clean this is. No conditionals, no sidebar logic, no auth checking. It does one thing: center the content. The layout group architecture lets each layout be single-purpose.
-
-### Dark Mode Support
-
-The `dark:` prefix classes (Tailwind's dark mode) work because we set up the dark mode in the root layout or `app.css`. The auth layout inherits this. The `bg-gray-50 dark:bg-gray-900` ensures the background adapts:
-
-```css
-/* In app.css — enable class-based dark mode */
-@custom-variant dark (&:where(.dark, .dark *));
+```typescript
+// src/routes/(auth)/+layout.ts
+export const ssr = false;
 ```
 
-```svelte
-<!-- In root +layout.svelte — toggle dark class on <html> -->
-<script lang="ts">
-  import { browser } from '$app/environment';
+Setting `ssr = false` on the auth layout means these pages are never server-rendered. This avoids flash-of-unstyled-content issues with client-only features and reduces server load since auth pages are interactive forms that require JavaScript anyway.
 
-  // Check system preference on load
-  if (browser) {
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    document.documentElement.classList.toggle('dark', prefersDark);
+### Auth Layout Redirect
+
+If a user is already authenticated, visiting `/login` should redirect them to the dashboard:
+
+```typescript
+// src/routes/(auth)/+layout.server.ts
+import { redirect } from '@sveltejs/kit';
+import type { LayoutServerLoad } from './$types';
+
+export const load: LayoutServerLoad = async ({ locals }) => {
+  if (locals.user) {
+    redirect(303, '/dashboard');
   }
-</script>
+};
 ```
 
 ## App Layout (Full Shell with Auth Guard)
 
-The app layout provides the sidebar, header, and navigation. Its server load function acts as an auth guard — this is the most important architectural pattern in the lesson.
-
-### The Auth Guard
+The app layout provides the sidebar, header, navigation, and user information. Its server load function acts as an auth guard — the single most important line of code in your application's security model:
 
 ```typescript
 // src/routes/(app)/+layout.server.ts
 import { redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
+import { db } from '$lib/server/db';
+import { teams, teamMembers } from '$lib/server/schema';
+import { eq } from 'drizzle-orm';
 
 export const load: LayoutServerLoad = async ({ locals }) => {
   if (!locals.user) {
     redirect(303, '/login');
   }
 
+  // Fetch the user's teams for the sidebar navigation
+  const userTeams = await db
+    .select({
+      slug: teams.slug,
+      name: teams.name,
+      role: teamMembers.role
+    })
+    .from(teamMembers)
+    .innerJoin(teams, eq(teams.id, teamMembers.teamId))
+    .where(eq(teamMembers.userId, locals.user.id));
+
   return {
-    user: locals.user
+    user: locals.user,
+    teams: userTeams
   };
 };
 ```
 
-If `locals.user` is null (the auth hook did not find a valid session), the user is redirected to login. **Every route inside `(app)/` inherits this protection automatically.** You never need to add auth checks to individual pages inside the app group — the layout server load runs before any child page load.
-
-### WRONG vs CORRECT: Auth Protection
-
-```typescript
-// WRONG: Checking auth in every page's load function
-// src/routes/(app)/dashboard/+page.server.ts
-export const load = async ({ locals }) => {
-  if (!locals.user) redirect(303, '/login');  // Repeated everywhere
-  // ...
-};
-
-// src/routes/(app)/settings/+page.server.ts
-export const load = async ({ locals }) => {
-  if (!locals.user) redirect(303, '/login');  // Copy-pasted
-  // ...
-};
-
-// src/routes/(app)/boards/+page.server.ts
-export const load = async ({ locals }) => {
-  if (!locals.user) redirect(303, '/login');  // Again...
-  // ...
-};
-// Problem: Forget ONE page and you have a security hole.
-
-// CORRECT: Auth check in the group layout — covers everything
-// src/routes/(app)/+layout.server.ts
-export const load = async ({ locals }) => {
-  if (!locals.user) redirect(303, '/login');
-  return { user: locals.user };
-};
-// Every page in (app)/ is protected. No exceptions. No copy-paste.
-```
-
-### How locals.user Gets Set
-
-The `locals.user` value comes from a hooks file that runs on every request:
-
-```typescript
-// src/hooks.server.ts
-import type { Handle } from '@sveltejs/kit';
-import { verifySession } from '$lib/server/auth';
-
-export const handle: Handle = async ({ event, resolve }) => {
-  // Read the session cookie
-  const sessionToken = event.cookies.get('session');
-
-  if (sessionToken) {
-    // Verify the token and load the user
-    const user = await verifySession(sessionToken);
-    if (user) {
-      event.locals.user = user;
-    }
-  }
-
-  return resolve(event);
-};
-```
-
-This runs BEFORE any load function. By the time the `(app)` layout's load function checks `locals.user`, the hook has already populated it (or not). The flow:
-
-```
-Request comes in → hooks.server.ts reads cookie → verifies session → sets locals.user
-  → (app)/+layout.server.ts checks locals.user → redirects if null
-    → dashboard/+page.server.ts runs (user is guaranteed to exist)
-```
-
-### The App Layout Component
+If `event.locals.user` is null (the auth hook did not find a valid session), the user is redirected to login. Every route inside `(app)/` inherits this protection automatically — no per-page checks needed.
 
 ```svelte
 <!-- src/routes/(app)/+layout.svelte -->
 <script lang="ts">
   import { page } from '$app/state';
+  import { navigating } from '$app/state';
+  import { enhance } from '$app/forms';
 
   let { data, children } = $props();
   let sidebarOpen = $state(true);
+  let innerWidth = $state(0);
 
-  // Navigation items — could be loaded from the server or defined statically
-  const navItems = [
-    { href: '/dashboard', label: 'Dashboard', icon: 'home' },
-    { href: '/boards', label: 'Boards', icon: 'layout' },
-    { href: '/settings', label: 'Settings', icon: 'settings' },
-  ];
-
-  // Check if a nav item is active (exact match or starts with)
-  function isActive(href: string): boolean {
-    if (href === '/dashboard') {
-      return page.url.pathname === '/dashboard';
+  // Auto-collapse sidebar on mobile
+  $effect(() => {
+    if (innerWidth < 768) {
+      sidebarOpen = false;
     }
-    return page.url.pathname.startsWith(href);
-  }
+  });
 </script>
 
+<svelte:window bind:innerWidth />
+
 <svelte:head>
-  <title>
-    {page.url.pathname === '/dashboard'
-      ? 'Dashboard'
-      : 'TeamBoard'} — {data.user.name}
-  </title>
+  <title>Dashboard - {data.user.name}</title>
 </svelte:head>
+
+<!-- Top loading bar during navigation -->
+{#if navigating.to}
+  <div class="fixed top-0 left-0 right-0 h-1 bg-indigo-100 z-50">
+    <div class="h-full bg-indigo-600 animate-progress"></div>
+  </div>
+{/if}
 
 <div class="flex h-screen overflow-hidden">
   <!-- Sidebar -->
-  <aside
-    class="w-64 border-r bg-white dark:bg-gray-800 flex flex-col transition-transform duration-200"
-    class:-translate-x-full={!sidebarOpen}
-    class:translate-x-0={sidebarOpen}
-  >
-    <!-- Sidebar header -->
-    <div class="p-4 border-b">
-      <h2 class="font-semibold text-lg">TeamBoard</h2>
-    </div>
+  {#if sidebarOpen}
+    <aside class="w-64 border-r bg-white dark:bg-gray-800 flex flex-col overflow-y-auto">
+      <div class="p-4 border-b">
+        <h2 class="font-semibold text-sm text-gray-500 uppercase tracking-wider">Teams</h2>
+      </div>
 
-    <!-- Navigation -->
-    <nav class="flex-1 p-4 space-y-1" aria-label="App navigation">
-      {#each navItems as item (item.href)}
+      <nav class="flex-1 p-2 space-y-1">
         <a
-          href={item.href}
-          class="block px-3 py-2 rounded-lg text-sm transition-colors"
-          class:bg-indigo-50={isActive(item.href)}
-          class:text-indigo-700={isActive(item.href)}
-          class:dark:bg-indigo-900={isActive(item.href)}
-          class:text-gray-700={!isActive(item.href)}
-          class:hover:bg-gray-100={!isActive(item.href)}
-          aria-current={isActive(item.href) ? 'page' : undefined}
+          href="/dashboard"
+          class="block px-3 py-2 rounded-lg text-sm font-medium transition-colors"
+          class:bg-indigo-50={page.url.pathname === '/dashboard'}
+          class:text-indigo-700={page.url.pathname === '/dashboard'}
+          class:dark:bg-indigo-900={page.url.pathname === '/dashboard'}
+          class:text-gray-700={page.url.pathname !== '/dashboard'}
+          class:hover:bg-gray-100={page.url.pathname !== '/dashboard'}
         >
-          {item.label}
+          Dashboard
         </a>
-      {/each}
-    </nav>
 
-    <!-- User info at the bottom -->
-    <div class="p-4 border-t mt-auto">
-      <p class="text-sm font-medium text-gray-900 dark:text-white">
-        {data.user.name}
-      </p>
-      <p class="text-xs text-gray-500 dark:text-gray-400">
-        {data.user.email}
-      </p>
-      <form method="POST" action="/logout" class="mt-2">
-        <button
-          type="submit"
-          class="text-xs text-red-600 hover:text-red-800 hover:underline"
+        {#each data.teams as team (team.slug)}
+          <a
+            href="/{team.slug}"
+            class="block px-3 py-2 rounded-lg text-sm transition-colors"
+            class:bg-indigo-50={page.url.pathname.startsWith(`/${team.slug}`)}
+            class:text-indigo-700={page.url.pathname.startsWith(`/${team.slug}`)}
+            class:text-gray-700={!page.url.pathname.startsWith(`/${team.slug}`)}
+            class:hover:bg-gray-100={!page.url.pathname.startsWith(`/${team.slug}`)}
+          >
+            {team.name}
+            {#if team.role === 'admin'}
+              <span class="text-xs text-gray-400 ml-1">admin</span>
+            {/if}
+          </a>
+        {/each}
+
+        <a
+          href="/settings/profile"
+          class="block px-3 py-2 rounded-lg text-sm transition-colors"
+          class:bg-indigo-50={page.url.pathname.startsWith('/settings')}
+          class:text-indigo-700={page.url.pathname.startsWith('/settings')}
+          class:text-gray-700={!page.url.pathname.startsWith('/settings')}
         >
-          Log out
-        </button>
-      </form>
-    </div>
-  </aside>
+          Settings
+        </a>
+      </nav>
+
+      <!-- User info and logout -->
+      <div class="p-4 border-t">
+        <div class="flex items-center gap-3">
+          {#if data.user.avatarUrl}
+            <img src={data.user.avatarUrl} alt="" width={32} height={32} class="rounded-full" />
+          {:else}
+            <div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-sm font-medium text-indigo-700">
+              {data.user.name[0]}
+            </div>
+          {/if}
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-medium text-gray-900 dark:text-white truncate">{data.user.name}</p>
+            <p class="text-xs text-gray-500 truncate">{data.user.email}</p>
+          </div>
+        </div>
+        <form method="POST" action="/logout" use:enhance class="mt-3">
+          <button type="submit" class="w-full text-left px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">
+            Sign Out
+          </button>
+        </form>
+      </div>
+    </aside>
+  {/if}
 
   <!-- Main content area -->
   <div class="flex-1 flex flex-col overflow-hidden">
-    <!-- Mobile header with sidebar toggle -->
-    <header class="lg:hidden flex items-center p-4 border-b">
+    <!-- Top bar with sidebar toggle and breadcrumbs -->
+    <header class="h-14 border-b bg-white dark:bg-gray-800 flex items-center px-4 gap-4">
       <button
-        onclick={() => sidebarOpen = !sidebarOpen}
-        class="p-2 rounded-lg hover:bg-gray-100"
+        class="p-1 rounded-lg hover:bg-gray-100"
+        onclick={() => { sidebarOpen = !sidebarOpen; }}
         aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
       >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+        <svg viewBox="0 0 20 20" fill="currentColor" width="20" height="20" aria-hidden="true">
+          <path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" />
         </svg>
       </button>
+
+      <nav aria-label="Breadcrumb" class="text-sm text-gray-500">
+        {#each page.url.pathname.split('/').filter(Boolean) as segment, i}
+          {#if i > 0}
+            <span class="mx-1">/</span>
+          {/if}
+          <span class="capitalize">{segment.replace(/-/g, ' ')}</span>
+        {/each}
+      </nav>
     </header>
 
-    <!-- Scrollable main content -->
+    <!-- Page content -->
     <main class="flex-1 overflow-auto p-6">
       {@render children()}
     </main>
   </div>
 </div>
+
+<style>
+  @keyframes progress {
+    0% { width: 0%; }
+    50% { width: 70%; }
+    100% { width: 90%; }
+  }
+
+  .animate-progress {
+    animation: progress 2s ease-in-out;
+    animation-fill-mode: forwards;
+  }
+</style>
 ```
 
-Key architectural decisions in this layout:
+### Nested Layout: Settings with Tabs
 
-1. **`flex h-screen overflow-hidden`** on the outer container: the layout fills the viewport exactly. No scrollbar on the body. The sidebar and main content each manage their own scrolling.
+The settings section has its own sub-layout with a tab bar:
 
-2. **`flex-1 overflow-auto`** on `<main>`: only the content area scrolls. The sidebar stays fixed. This is the standard app shell pattern used by Gmail, GitHub, Discord, etc.
+```svelte
+<!-- src/routes/(app)/settings/+layout.svelte -->
+<script lang="ts">
+  import { page } from '$app/state';
 
-3. **`aria-current="page"`** on active links: screen readers announce which page the user is currently on.
+  let { children } = $props();
 
-4. **Logout as a form POST**: logout should be a POST request (it changes server state), not a GET link. Using a form ensures it works without JavaScript and prevents CSRF via SvelteKit's built-in protection.
+  const tabs = [
+    { href: '/settings/profile', label: 'Profile' },
+    { href: '/settings/team', label: 'Team' },
+    { href: '/settings/billing', label: 'Billing' }
+  ];
+</script>
 
-## Login Page
+<svelte:head>
+  <title>Settings</title>
+</svelte:head>
 
-The login page uses a traditional SvelteKit form action. Form actions are the right choice here because login should work without client-side JavaScript — progressive enhancement at its best:
+<div class="max-w-4xl">
+  <h1 class="text-2xl font-bold mb-6">Settings</h1>
+
+  <nav class="border-b mb-6" aria-label="Settings tabs">
+    <div class="flex gap-4">
+      {#each tabs as tab (tab.href)}
+        <a
+          href={tab.href}
+          class="pb-3 text-sm font-medium border-b-2 transition-colors -mb-px"
+          class:border-indigo-600={page.url.pathname === tab.href}
+          class:text-indigo-600={page.url.pathname === tab.href}
+          class:border-transparent={page.url.pathname !== tab.href}
+          class:text-gray-500={page.url.pathname !== tab.href}
+          class:hover:text-gray-700={page.url.pathname !== tab.href}
+          aria-current={page.url.pathname === tab.href ? 'page' : undefined}
+        >
+          {tab.label}
+        </a>
+      {/each}
+    </div>
+  </nav>
+
+  {@render children()}
+</div>
+```
+
+When a user visits `/settings/profile`, SvelteKit renders: root layout -> app layout (sidebar) -> settings layout (tabs) -> profile page. Each layout adds its own structure, and the page fills in the content area.
+
+## Login Page with Progressive Enhancement
+
+The login page uses a traditional SvelteKit form action with `use:enhance` for progressive enhancement:
 
 ```svelte
 <!-- src/routes/(auth)/login/+page.svelte -->
@@ -449,119 +437,121 @@ The login page uses a traditional SvelteKit form action. Form actions are the ri
   import { enhance } from '$app/forms';
 
   let { form } = $props();
-  let loading = $state(false);
+  let submitting = $state(false);
 </script>
 
 <svelte:head>
-  <title>Log In — TeamBoard</title>
+  <title>Log In</title>
 </svelte:head>
 
 <form
   method="POST"
   use:enhance={() => {
-    loading = true;
+    submitting = true;
     return async ({ update }) => {
-      loading = false;
+      submitting = false;
       await update();
     };
   }}
   class="space-y-4"
 >
+  <h2 class="text-xl font-semibold text-center text-gray-900 dark:text-white">
+    Welcome back
+  </h2>
+
   {#if form?.error}
-    <div class="p-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400
-                rounded-lg text-sm" role="alert">
+    <div
+      class="p-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded-lg text-sm"
+      role="alert"
+    >
       {form.error}
     </div>
   {/if}
 
   <div>
-    <label for="email" class="block text-sm font-medium mb-1">Email</label>
+    <label for="email" class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Email</label>
     <input
-      id="email"
-      name="email"
-      type="email"
-      required
-      autocomplete="email"
+      id="email" name="email" type="email" required autocomplete="email"
       value={form?.email ?? ''}
-      class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500
-             focus:border-indigo-500 dark:bg-gray-800 dark:border-gray-600"
+      class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+      disabled={submitting}
     />
   </div>
 
   <div>
-    <label for="password" class="block text-sm font-medium mb-1">Password</label>
+    <label for="password" class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Password</label>
     <input
-      id="password"
-      name="password"
-      type="password"
-      required
-      autocomplete="current-password"
-      class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500
-             focus:border-indigo-500 dark:bg-gray-800 dark:border-gray-600"
+      id="password" name="password" type="password" required autocomplete="current-password"
+      class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+      disabled={submitting}
     />
   </div>
 
   <button
     type="submit"
-    disabled={loading}
-    class="w-full py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700
-           disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+    class="w-full py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+    disabled={submitting}
   >
-    {loading ? 'Logging in...' : 'Log In'}
+    {#if submitting}Signing in...{:else}Sign In{/if}
   </button>
 
-  <p class="text-center text-sm text-gray-600 dark:text-gray-400">
-    No account?
-    <a href="/signup" class="text-indigo-600 hover:underline dark:text-indigo-400">
-      Sign up
-    </a>
-  </p>
+  <div class="flex justify-between text-sm">
+    <a href="/forgot-password" class="text-indigo-600 hover:underline">Forgot password?</a>
+    <a href="/signup" class="text-indigo-600 hover:underline">Create account</a>
+  </div>
 </form>
 ```
-
-### The Login Server Action
 
 ```typescript
 // src/routes/(auth)/login/+page.server.ts
 import { fail, redirect } from '@sveltejs/kit';
 import type { Actions } from './$types';
 import { verifyPassword, createSession } from '$lib/server/auth';
-import { db } from '$lib/server/database';
+import { db } from '$lib/server/db';
 import { users } from '$lib/server/schema';
 import { eq } from 'drizzle-orm';
+import { rateLimit } from '$lib/server/rate-limit';
 
 export const actions: Actions = {
-  default: async ({ request, cookies }) => {
+  default: async ({ request, cookies, getClientAddress }) => {
+    // Rate limit login attempts — 10 per minute per IP
+    try {
+      rateLimit(`login:${getClientAddress()}`, 10, 60_000);
+    } catch {
+      return fail(429, { error: 'Too many login attempts. Please wait a minute.' });
+    }
+
     const data = await request.formData();
-    const email = data.get('email') as string;
+    const email = (data.get('email') as string)?.trim().toLowerCase();
     const password = data.get('password') as string;
 
-    // Validate inputs
     if (!email || !password) {
       return fail(400, { error: 'Email and password are required', email });
     }
 
-    // Look up the user
     const [user] = await db
-      .select()
-      .from(users)
-      .where(eq(users.email, email.toLowerCase().trim()))
+      .select().from(users)
+      .where(eq(users.email, email))
       .limit(1);
 
-    // SECURITY: Use the same error message for "user not found" and
-    // "wrong password" to prevent user enumeration attacks.
-    if (!user || !(await verifyPassword(password, user.passwordHash))) {
+    // Always hash the password even if user doesn't exist
+    // This prevents timing attacks that reveal whether an email is registered
+    if (!user) {
+      await verifyPassword(password, '$2b$12$invalidhashtowastetimedummy');
       return fail(400, { error: 'Invalid email or password', email });
     }
 
-    // Create a session
+    if (!(await verifyPassword(password, user.passwordHash))) {
+      return fail(400, { error: 'Invalid email or password', email });
+    }
+
     const sessionToken = await createSession(user.id);
 
     cookies.set('session', sessionToken, {
       path: '/',
-      httpOnly: true,     // JavaScript cannot read this cookie
-      secure: true,        // Only sent over HTTPS
-      sameSite: 'lax',     // CSRF protection
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 7 // 7 days
     });
 
@@ -570,223 +560,149 @@ export const actions: Actions = {
 };
 ```
 
-### Security Details Worth Understanding
-
-Several security patterns in the login flow deserve explanation:
-
-```typescript
-// 1. Same error message for both "not found" and "wrong password"
-if (!user || !(await verifyPassword(password, user.passwordHash))) {
-  return fail(400, { error: 'Invalid email or password', email });
-}
-// If you said "User not found" vs "Wrong password", an attacker could
-// enumerate valid email addresses by trying different emails and
-// watching which error they get. Same message = no information leak.
-
-// 2. Cookie security flags
-cookies.set('session', sessionToken, {
-  httpOnly: true,   // Prevents XSS from reading the cookie via document.cookie
-  secure: true,     // Cookie only sent over HTTPS (not HTTP)
-  sameSite: 'lax',  // Browser only sends cookie on same-site requests + top-level navigations
-                     // Prevents CSRF attacks from cross-origin forms
-  path: '/',        // Cookie available on all routes
-  maxAge: 60 * 60 * 24 * 7  // 7 days in seconds
-});
-
-// 3. Email normalization
-.where(eq(users.email, email.toLowerCase().trim()))
-// "User@Example.com " and "user@example.com" should find the same account
-```
-
-### The use:enhance Callback Pattern
-
-The `use:enhance` directive progressively enhances the form. Without it, the form submits normally (full page reload). With it, the form submits via fetch (no reload), and you get hooks for loading state:
-
-```svelte
-<form
-  method="POST"
-  use:enhance={() => {
-    // This runs BEFORE the form submits
-    loading = true;
-
-    return async ({ update, result }) => {
-      // This runs AFTER the server responds
-      loading = false;
-
-      if (result.type === 'redirect') {
-        // SvelteKit handles the redirect automatically
-        // No need to do anything here
-      }
-
-      // update() applies the server's response to the page
-      // (updates form.error, form.email, etc.)
-      await update();
-    };
-  }}
->
-```
-
-### WRONG vs CORRECT: Form Enhancement
-
-```svelte
-<!-- WRONG: Using fetch manually instead of use:enhance -->
-<script>
-  async function handleSubmit(e) {
-    e.preventDefault();
-    const formData = new FormData(e.target);
-    const res = await fetch('/login', {
-      method: 'POST',
-      body: formData
-    });
-    // Now you have to handle redirects, errors, cookies manually...
-    // And the form doesn't work without JavaScript!
-  }
-</script>
-<form onsubmit={handleSubmit}>...</form>
-
-<!-- CORRECT: use:enhance — works without JS, enhanced with JS -->
-<form method="POST" use:enhance>...</form>
-<!-- Without JavaScript: traditional form submission (full reload)
-     With JavaScript: fetch submission (no reload, smooth UX) -->
-```
+Security details worth noting:
+- **Rate limiting** prevents brute-force attacks on the login endpoint
+- **Timing-safe comparison**: we hash even when the user does not exist, preventing attackers from determining which emails are registered by measuring response time
+- **Generic error message**: "Invalid email or password" does not reveal whether the email exists
+- **Secure cookie flags**: `httpOnly` prevents JavaScript access, `secure` requires HTTPS, `sameSite: 'lax'` provides CSRF protection
 
 ## Page Options
 
-Different sections of TeamBoard have different rendering requirements. SvelteKit's page options let you configure each section appropriately:
+Different sections of the app need different rendering strategies:
 
 ```typescript
-// src/routes/+page.ts
-// The marketing landing page is static — prerender it at build time
-// This generates a static HTML file that can be served from a CDN
+// src/routes/+page.ts — Marketing landing page
 export const prerender = true;
 ```
 
 ```typescript
-// src/routes/(auth)/+layout.ts
-// Auth pages are interactive forms. Disabling SSR means the auth layout
-// never renders on the server, which avoids issues with client-only features.
-// The login form still works via progressive enhancement.
+// src/routes/(auth)/+layout.ts — Auth pages
 export const ssr = false;
 ```
 
+The `prerender = true` option generates a static HTML file at build time. The marketing page is served from a CDN with zero server processing — the fastest possible load time.
+
+## Custom Error Handling — The Complete Architecture
+
+Error handling in SvelteKit follows a hierarchy: when an error occurs, SvelteKit walks up the route tree looking for the nearest `+error.svelte` file. This means you can have different error pages for different sections of your app.
+
+### Custom Error Helpers
+
+Define application-specific error helpers that generate error IDs for debugging:
+
 ```typescript
-// src/routes/(app)/+layout.ts
-// The app section requires auth, so SSR is fine (the server has the session).
-// CSR must stay enabled for interactivity.
-// No special options needed — defaults are correct.
+// src/lib/server/errors.ts
+import { error } from '@sveltejs/kit';
+
+export function notFound(resource: string, id?: string): never {
+  const errorId = crypto.randomUUID();
+  console.error(`[${errorId}] ${resource} not found: ${id ?? 'unknown'}`);
+  throw error(404, {
+    message: `${resource} not found`,
+    errorId
+  } as any);
+}
+
+export function forbidden(reason: string): never {
+  const errorId = crypto.randomUUID();
+  console.error(`[${errorId}] Forbidden: ${reason}`);
+  throw error(403, {
+    message: 'You do not have permission to access this resource',
+    errorId
+  } as any);
+}
+
+export function badRequest(message: string, errors?: Record<string, string>): never {
+  throw error(400, { message, errors } as any);
+}
 ```
 
-### WRONG vs CORRECT: Page Options
+Use these helpers in your load functions:
 
 ```typescript
-// WRONG: Prerendering a page that depends on user-specific data
-// src/routes/(app)/dashboard/+page.ts
-export const prerender = true;
-// Prerendering generates ONE static HTML file at build time.
-// It cannot include user-specific data (different users see different dashboards).
+// src/routes/(app)/[teamSlug]/+layout.server.ts
+import { notFound, forbidden } from '$lib/server/errors';
+import type { LayoutServerLoad } from './$types';
+import { db } from '$lib/server/db';
+import { teams, teamMembers } from '$lib/server/schema';
+import { eq, and } from 'drizzle-orm';
 
-// CORRECT: Prerender only static pages
-// src/routes/pricing/+page.ts
-export const prerender = true;
-// Pricing is the same for everyone — safe to prerender.
+export const load: LayoutServerLoad = async ({ params, locals }) => {
+  const [team] = await db
+    .select().from(teams)
+    .where(eq(teams.slug, params.teamSlug))
+    .limit(1);
 
-// WRONG: Disabling SSR on the app section
-// src/routes/(app)/+layout.ts
-export const ssr = false;
-// The app section has an auth guard in +layout.server.ts.
-// If SSR is disabled, the server load function still runs,
-// but the HTML is not server-rendered. This means the user sees
-// a blank page until JavaScript loads. The auth guard still works,
-// but the perceived load time is worse.
+  if (!team) {
+    notFound('Team', params.teamSlug);
+  }
 
-// CORRECT: Keep SSR enabled for the app section
-// (No page options needed — defaults are fine)
+  const [membership] = await db
+    .select().from(teamMembers)
+    .where(and(
+      eq(teamMembers.teamId, team.id),
+      eq(teamMembers.userId, locals.user!.id)
+    ))
+    .limit(1);
+
+  if (!membership) {
+    forbidden(`User ${locals.user!.id} is not a member of team ${team.slug}`);
+  }
+
+  return { team, membership };
+};
 ```
 
-## Custom Error Pages
+### The Error Page Hierarchy
 
-TeamBoard has error pages at two levels, and understanding which error page renders in which situation is critical for debugging.
-
-### Error Page Resolution
-
-SvelteKit walks UP the route tree to find the nearest `+error.svelte`:
-
-```
-Request: /dashboard/nonexistent
-
-1. Check: src/routes/(app)/dashboard/+error.svelte → not found
-2. Check: src/routes/(app)/+error.svelte → FOUND, use this
-   (renders inside (app)/+layout.svelte — with the sidebar!)
-
-Request: /xyz (no matching route)
-
-1. No route matches, so SvelteKit uses the root error page
-2. Check: src/routes/+error.svelte → FOUND, use this
-   (renders inside root +layout.svelte — no sidebar)
-```
-
-**Critical detail:** the error page renders inside the nearest layout that did NOT throw the error. If `(app)/+layout.server.ts` itself throws, the error page renders inside the ROOT layout (because the app layout is the one that failed). If a page load function throws, the error page renders inside the app layout (because the layout succeeded but the page failed).
-
-### Root Error Page
-
-The root error page handles 404s and unexpected errors across the entire app:
+**Root error page** — the ultimate fallback for any error:
 
 ```svelte
 <!-- src/routes/+error.svelte -->
 <script lang="ts">
   import { page } from '$app/state';
+
+  const messages: Record<number, string> = {
+    404: 'The page you are looking for does not exist.',
+    403: 'You do not have permission to view this page.',
+    500: 'Something went wrong on our end. We have been notified.'
+  };
 </script>
 
 <svelte:head>
-  <title>Error {page.status} — TeamBoard</title>
+  <title>Error {page.status}</title>
+  <meta name="robots" content="noindex" />
 </svelte:head>
 
-<div class="min-h-screen flex items-center justify-center px-4">
-  <div class="text-center max-w-md">
-    <h1 class="text-7xl font-bold text-gray-200 dark:text-gray-700">
-      {page.status}
-    </h1>
-
-    <h2 class="text-xl font-semibold mt-4 text-gray-900 dark:text-white">
-      {#if page.status === 404}
-        Page Not Found
-      {:else if page.status === 500}
-        Server Error
-      {:else if page.status === 403}
-        Access Denied
-      {:else}
-        Something Went Wrong
-      {/if}
-    </h2>
-
-    <p class="mt-2 text-gray-600 dark:text-gray-400">
-      {page.error?.message ?? 'An unexpected error occurred.'}
+<div class="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+  <div class="text-center px-4">
+    <h1 class="text-8xl font-bold text-gray-200 dark:text-gray-700">{page.status}</h1>
+    <p class="text-xl text-gray-600 dark:text-gray-400 mt-4">
+      {messages[page.status] ?? page.error?.message ?? 'An unexpected error occurred'}
     </p>
 
     {#if page.error?.errorId}
-      <p class="text-sm text-gray-400 mt-3 font-mono">
-        Error ID: {page.error.errorId}
+      <p class="text-sm text-gray-400 mt-2">
+        Reference: <code>{page.error.errorId}</code>
       </p>
     {/if}
 
-    <div class="mt-8 space-x-4">
-      <a href="/" class="text-indigo-600 hover:underline dark:text-indigo-400">
-        Go home
+    <div class="mt-8 flex gap-4 justify-center">
+      <a href="/" class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+        Go Home
       </a>
       <button
-        onclick={() => window.location.reload()}
-        class="text-gray-500 hover:underline"
+        onclick={() => history.back()}
+        class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-100"
       >
-        Try again
+        Go Back
       </button>
     </div>
   </div>
 </div>
 ```
 
-### App Error Page
-
-The app-level error page is more specific — it includes the sidebar (because it renders inside the app layout) and provides a "back to dashboard" link:
+**App-level error page** — inherits the sidebar from the app layout:
 
 ```svelte
 <!-- src/routes/(app)/+error.svelte -->
@@ -794,261 +710,216 @@ The app-level error page is more specific — it includes the sidebar (because i
   import { page } from '$app/state';
 </script>
 
-<div class="flex items-center justify-center min-h-[60vh] p-8">
-  <div class="text-center max-w-md">
-    <h1 class="text-5xl font-bold text-gray-200 dark:text-gray-700">
-      {page.status}
-    </h1>
-
-    <h2 class="text-lg font-semibold mt-4">
-      {#if page.status === 404}
-        Page Not Found
-      {:else if page.status === 403}
-        You don't have access to this resource
-      {:else}
-        Something Went Wrong
-      {/if}
-    </h2>
-
-    <p class="mt-2 text-gray-600 dark:text-gray-400">
-      {page.error?.message}
-    </p>
-
-    {#if page.error?.errorId}
-      <p class="text-sm text-gray-400 mt-2 font-mono">
-        Reference: {page.error.errorId}
-      </p>
+<div class="max-w-lg mx-auto py-12 text-center">
+  <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
+    {#if page.status === 404}
+      Page Not Found
+    {:else if page.status === 403}
+      Access Denied
+    {:else}
+      Something Went Wrong
     {/if}
+  </h1>
 
-    <a
-      href="/dashboard"
-      class="inline-block mt-6 px-4 py-2 bg-indigo-600 text-white rounded-lg
-             hover:bg-indigo-700 transition-colors"
-    >
-      Back to Dashboard
-    </a>
-  </div>
+  <p class="mt-3 text-gray-600 dark:text-gray-400">
+    {page.error?.message ?? 'An unexpected error occurred'}
+  </p>
+
+  {#if page.error?.errorId}
+    <p class="text-sm text-gray-400 mt-2">
+      Reference: <code class="bg-gray-100 px-2 py-0.5 rounded">{page.error.errorId}</code>
+    </p>
+  {/if}
+
+  <a href="/dashboard" class="inline-block mt-6 text-indigo-600 hover:underline font-medium">
+    Back to Dashboard
+  </a>
 </div>
 ```
 
-Because this error page is inside `(app)/`, it inherits the app layout with the sidebar. A 404 inside the app looks different from a 404 on the marketing site. The user keeps their navigation context.
+Because this error page is inside `(app)/`, it inherits the app layout with the sidebar. A 404 inside the app looks different from a 404 on the marketing site.
 
-### Custom Error IDs for Debugging
+**Team-level error page** — specific to team routes:
 
-In production, generic error messages protect your users from seeing stack traces. But you still need to debug. Error IDs bridge this gap:
+```svelte
+<!-- src/routes/(app)/[teamSlug]/+error.svelte -->
+<script lang="ts">
+  import { page } from '$app/state';
+</script>
+
+<div class="max-w-lg mx-auto py-12 text-center">
+  <h1 class="text-2xl font-bold">
+    {#if page.status === 403}
+      Not a Team Member
+    {:else if page.status === 404}
+      Team Not Found
+    {:else}
+      Error
+    {/if}
+  </h1>
+
+  <p class="mt-3 text-gray-600">{page.error?.message}</p>
+
+  {#if page.status === 403}
+    <p class="mt-2 text-sm text-gray-500">
+      Contact the team administrator to request access.
+    </p>
+  {/if}
+
+  <a href="/dashboard" class="inline-block mt-6 text-indigo-600 hover:underline">
+    Back to Dashboard
+  </a>
+</div>
+```
+
+### Error Handling in Hooks
+
+The `handleError` hook runs for every unhandled error. This is where you log errors, generate error IDs, and sanitize messages:
 
 ```typescript
 // src/hooks.server.ts
-import { randomUUID } from 'crypto';
 import type { HandleServerError } from '@sveltejs/kit';
 
 export const handleError: HandleServerError = async ({ error, event, status, message }) => {
-  const errorId = randomUUID().slice(0, 8); // Short, shareable ID
+  const errorId = crypto.randomUUID();
 
-  // Log the full error with the ID — this goes to your server logs
-  console.error(`[${errorId}]`, {
-    status,
-    message,
-    url: event.url.pathname,
-    method: event.request.method,
-    error: error instanceof Error ? error.stack : error,
-  });
+  console.error(`[${errorId}] ${event.request.method} ${event.url.pathname}:`, error);
 
-  // Return a safe error object to the client — no stack traces!
+  // In production, report to error tracking (Sentry, DataDog, etc.)
+
   return {
-    message: status === 404
-      ? 'The page you requested could not be found.'
-      : 'An unexpected error occurred. Please try again.',
-    errorId,
+    message: status === 500
+      ? 'An internal error occurred. Our team has been notified.'
+      : message,
+    errorId
   };
 };
 ```
 
-Now when a user reports "I got an error," they can share the error ID. You search your logs for that ID and find the full stack trace. The user never sees sensitive implementation details.
-
-### Programmatic Error Throwing
-
-In your load functions and actions, you can throw errors that SvelteKit routes to the error page:
-
 ```typescript
-// src/routes/(app)/[teamSlug]/+page.server.ts
-import { error } from '@sveltejs/kit';
-import type { PageServerLoad } from './$types';
+// src/hooks.client.ts
+import type { HandleClientError } from '@sveltejs/kit';
 
-export const load: PageServerLoad = async ({ params, locals }) => {
-  const team = await db.query.teams.findFirst({
-    where: eq(teams.slug, params.teamSlug)
-  });
+export const handleError: HandleClientError = async ({ error, event, status, message }) => {
+  const errorId = crypto.randomUUID();
+  console.error(`[${errorId}] Client error:`, error);
 
-  if (!team) {
-    error(404, 'Team not found');
-    // This renders (app)/+error.svelte with status 404
-  }
-
-  const isMember = await db.query.teamMembers.findFirst({
-    where: and(
-      eq(teamMembers.teamId, team.id),
-      eq(teamMembers.userId, locals.user.id)
-    )
-  });
-
-  if (!isMember) {
-    error(403, 'You are not a member of this team');
-    // This renders (app)/+error.svelte with status 403
-  }
-
-  return { team };
+  return {
+    message: 'Something went wrong. Please try refreshing the page.',
+    errorId
+  };
 };
 ```
 
-### WRONG vs CORRECT: Error Handling
+### Error Boundaries for Component-Level Errors
 
-```typescript
-// WRONG: Returning error data as normal page data
-export const load = async ({ params }) => {
-  const team = await db.query.teams.findFirst({
-    where: eq(teams.slug, params.teamSlug)
-  });
-  return { team }; // team is null — page has to handle null
-  // The page now needs {#if data.team} everywhere. Messy.
-};
-
-// CORRECT: Throw an error — SvelteKit routes to the error page
-export const load = async ({ params }) => {
-  const team = await db.query.teams.findFirst({
-    where: eq(teams.slug, params.teamSlug)
-  });
-  if (!team) error(404, 'Team not found');
-  return { team }; // TypeScript now knows team is NOT null
-};
-
-// WRONG: Throwing a generic JavaScript error
-export const load = async () => {
-  throw new Error('Something failed');
-  // This becomes a 500 error with the message hidden from the user
-  // (for security — you don't want stack traces in the browser)
-};
-
-// CORRECT: Using SvelteKit's error() helper with a status code
-import { error } from '@sveltejs/kit';
-export const load = async () => {
-  error(400, 'Invalid request parameters');
-  // Status code + message appear in +error.svelte via page.status and page.error.message
-};
-```
-
-## The Signup Page
-
-For completeness, here is the signup page following the same patterns:
+For errors that should not crash the entire page, use `<svelte:boundary>`:
 
 ```svelte
-<!-- src/routes/(auth)/signup/+page.svelte -->
+<!-- src/routes/(app)/dashboard/+page.svelte -->
 <script lang="ts">
-  import { enhance } from '$app/forms';
+  import ActivityFeed from '$lib/components/ActivityFeed.svelte';
+  import QuickActions from '$lib/components/QuickActions.svelte';
 
-  let { form } = $props();
-  let loading = $state(false);
+  let { data } = $props();
 </script>
 
-<svelte:head>
-  <title>Sign Up — TeamBoard</title>
-</svelte:head>
+<h1 class="text-2xl font-bold mb-6">Dashboard</h1>
 
-<form
-  method="POST"
-  use:enhance={() => {
-    loading = true;
-    return async ({ update }) => {
-      loading = false;
-      await update();
-    };
-  }}
-  class="space-y-4"
->
-  {#if form?.error}
-    <div class="p-3 bg-red-50 text-red-700 rounded-lg text-sm" role="alert">
-      {form.error}
-    </div>
-  {/if}
-
-  <div>
-    <label for="name" class="block text-sm font-medium mb-1">Name</label>
-    <input
-      id="name" name="name" type="text" required
-      autocomplete="name"
-      value={form?.name ?? ''}
-      class="w-full px-3 py-2 border rounded-lg"
-    />
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <div class="lg:col-span-2">
+    <svelte:boundary>
+      <ActivityFeed items={data.recentActivity} />
+      {#snippet failed(error, reset)}
+        <div class="p-4 bg-red-50 rounded-lg">
+          <p>Could not load activity feed.</p>
+          <button onclick={reset} class="text-indigo-600 hover:underline mt-2">Retry</button>
+        </div>
+      {/snippet}
+    </svelte:boundary>
   </div>
 
   <div>
-    <label for="email" class="block text-sm font-medium mb-1">Email</label>
-    <input
-      id="email" name="email" type="email" required
-      autocomplete="email"
-      value={form?.email ?? ''}
-      class="w-full px-3 py-2 border rounded-lg"
-    />
+    <svelte:boundary>
+      <QuickActions teams={data.teams} />
+      {#snippet failed(error, reset)}
+        <div class="p-4 bg-red-50 rounded-lg">
+          <p>Could not load quick actions.</p>
+          <button onclick={reset} class="text-indigo-600 hover:underline mt-2">Retry</button>
+        </div>
+      {/snippet}
+    </svelte:boundary>
   </div>
-
-  <div>
-    <label for="password" class="block text-sm font-medium mb-1">Password</label>
-    <input
-      id="password" name="password" type="password" required
-      autocomplete="new-password"
-      minlength="8"
-      class="w-full px-3 py-2 border rounded-lg"
-    />
-    <p class="text-xs text-gray-500 mt-1">At least 8 characters</p>
-  </div>
-
-  <button
-    type="submit" disabled={loading}
-    class="w-full py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700
-           disabled:opacity-50 transition-colors"
-  >
-    {loading ? 'Creating account...' : 'Sign Up'}
-  </button>
-
-  <p class="text-center text-sm text-gray-600">
-    Already have an account?
-    <a href="/login" class="text-indigo-600 hover:underline">Log in</a>
-  </p>
-</form>
+</div>
 ```
+
+## Loading States During Navigation
+
+The `navigating` state from `$app/state` contains `from` and `to` URL objects during navigation, and is falsy otherwise. The app layout above already includes a progress bar. Here is a more advanced pattern with a loading overlay for slow navigations:
+
+```svelte
+<script lang="ts">
+  import { navigating } from '$app/state';
+
+  // Only show loading state if navigation takes more than 300ms
+  let showLoadingOverlay = $state(false);
+  let loadingTimer: ReturnType<typeof setTimeout>;
+
+  $effect(() => {
+    if (navigating.to) {
+      loadingTimer = setTimeout(() => {
+        showLoadingOverlay = true;
+      }, 300);
+    } else {
+      clearTimeout(loadingTimer);
+      showLoadingOverlay = false;
+    }
+
+    return () => clearTimeout(loadingTimer);
+  });
+</script>
+
+{#if showLoadingOverlay}
+  <div class="fixed inset-0 bg-white/50 z-40 flex items-center justify-center">
+    <div class="animate-spin w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full"></div>
+  </div>
+{/if}
+```
+
+The 300ms delay prevents the loading overlay from flashing on fast navigations — it only appears for genuinely slow transitions.
 
 ## Try It
 
-Verify the layout structure by testing these scenarios:
+Verify the layout and error structure works end-to-end:
 
-1. **Auth layout**: Visit `/login` — you should see the centered auth layout with no sidebar. The app name should appear above the form.
+1. **Layout inheritance**: Visit `/login` — should show the centered auth layout. Visit `/dashboard` — should show the app layout with sidebar. Visit `/settings/profile` — should show the app layout + settings tabs.
 
-2. **Auth guard**: Visit `/dashboard` without a session cookie — you should be redirected to `/login`. Check the network tab to see the 303 redirect.
+2. **Auth guard**: Visit `/dashboard` without a session — should redirect to `/login`. Visit `/login` with an active session — should redirect to `/dashboard`.
 
-3. **App layout**: Visit `/dashboard` with a valid session — you should see the full app layout with sidebar, user info at the bottom, and the dashboard content in the main area.
+3. **Error page hierarchy**: Visit `/nonexistent` — should show the root error page (no sidebar). Visit `/dashboard/nonexistent` — should show the app-level error page (with sidebar). Visit `/team-slug/nonexistent-board` — should show the team-level error page.
 
-4. **Root error page**: Visit a nonexistent route like `/xyz` — you should see the root error page (no sidebar, full-page centered layout) with a 404 status.
+4. **View Transitions**: Navigate between pages and verify the crossfade animation plays. Try navigating between auth and app pages.
 
-5. **App error page**: Visit `/dashboard/nonexistent` — you should see the app-level error page with the sidebar still visible. The error renders INSIDE the app layout.
+5. **Loading states**: Add a 2-second delay to a load function (`await new Promise(r => setTimeout(r, 2000))`) and navigate to that page. The loading bar should appear during the delay.
 
-6. **View Transitions**: Navigate between pages by clicking links — you should see a crossfade animation. Open DevTools Network tab and notice that only the page data loads on navigation, not the full HTML.
+6. **Error boundaries**: Create a component that throws during rendering. Wrap it in `<svelte:boundary>` and verify the fallback shows while the rest of the page works.
 
-7. **Progressive enhancement**: Disable JavaScript in DevTools, then try to log in. The form should still submit (full page reload), the auth should still work, and the redirect should still happen. This is progressive enhancement in action.
-
-8. **Error IDs**: Throw an error in a load function and check both the browser (should show a short error ID) and your server console (should show the full error with the same ID).
+7. **Mobile responsiveness**: Resize below 768px — the sidebar should collapse. The toggle button should open and close it.
 
 ## Key Takeaways
 
-- Layout groups `(auth)` and `(app)` create separate layout boundaries without affecting URLs — each group gets its own layout, and the parenthesized name is stripped from the URL
-- Layout groups replace conditional rendering in layouts — instead of one layout with `{#if isAuthenticated}`, you have clean, single-purpose layouts per group
-- `onNavigate` integrates the View Transitions API for smooth crossfade between pages — it fires before navigation, captures a screenshot, then crossfades to the new DOM
-- Named view transitions (`view-transition-name`) let persistent elements like sidebars stay in place while only the content area animates
-- Auth guard in `+layout.server.ts` protects every route in the group automatically — no per-page checks needed, and forgetting one page cannot create a security hole
-- `locals.user` is set by `hooks.server.ts` before any load function runs — the hook reads the session cookie and verifies it on every request
-- `use:enhance` progressively enhances forms — they work with and without JavaScript, and you get hooks for loading state and error handling
-- Security details matter: same error messages prevent user enumeration, `httpOnly` + `secure` + `sameSite` cookie flags prevent XSS/CSRF, and logout should always be a POST
-- Page options (`prerender = true`, `ssr = false`) optimize each section appropriately — prerender static marketing pages, disable SSR only when you have a specific reason
-- Custom `+error.svelte` at different route levels shows contextual error UIs — app errors keep the sidebar, root errors show a full-page layout
-- SvelteKit walks UP the route tree to find the nearest error page — and the error renders inside the nearest layout that did NOT fail
-- `handleError` in `hooks.server.ts` generates error IDs so users can report errors without exposing stack traces
-- Use SvelteKit's `error()` helper (not `throw new Error()`) so the status code and message appear in the error page via `page.status` and `page.error.message`
+- Layout groups `(auth)` and `(app)` create separate layout boundaries without affecting URLs — use them for sections with completely different visual structures
+- Every page inherits all layouts above it in the file tree — layouts nest automatically based on directory structure
+- Auth guards in `+layout.server.ts` protect every route in the group with a single check — no per-page guards needed
+- `onNavigate` with the View Transitions API provides smooth crossfade animations between pages with minimal code
+- `<svelte:head>` injects page-specific titles, meta tags, and preload hints — server-rendered for SEO
+- Page options (`prerender = true`, `ssr = false`) optimize rendering strategy per section
+- SvelteKit walks up the route tree to find the nearest `+error.svelte` — place error pages at each level for contextual error UIs
+- The app-level error page inherits the app layout (sidebar), while the root error page gets a full-page layout
+- Custom error helpers (`notFound`, `forbidden`, `badRequest`) generate error IDs for debugging and sanitize messages for the client
+- `handleError` hooks (server and client) log full errors, report to tracking services, and return sanitized messages
+- `<svelte:boundary>` catches component-level errors without crashing the entire page — use the bulkhead pattern for independent sections
+- The `navigating` state from `$app/state` enables loading bars and navigation indicators — add a delay threshold to avoid flash on fast navigations
+- Always return generic error messages to the client ("Invalid email or password") — never reveal whether specific data exists
+- Rate limiting on auth endpoints prevents brute-force attacks — implement at the action level with IP-based throttling
+- Timing-safe password comparison prevents enumeration attacks — always hash even when the user does not exist

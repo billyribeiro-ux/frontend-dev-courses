@@ -645,6 +645,86 @@ user_id INTEGER REFERENCES users(id) ON DELETE SET NULL
 
 Each option has legitimate use cases. CASCADE is convenient but dangerous -- a single DELETE can wipe out massive amounts of data. RESTRICT is safer because it forces you to handle dependent data explicitly. SET NULL is useful for preserving content while dissociating it from the deleted user.
 
+## N+1 Query Problem: The Most Common Performance Pitfall
+
+The N+1 query problem is the single most common database performance issue in web applications. Understanding it now saves debugging time later:
+
+```sql
+-- You want to display 10 blog posts with their author names.
+
+-- N+1 approach (WRONG -- 11 queries):
+SELECT * FROM posts LIMIT 10;              -- 1 query for posts
+SELECT * FROM users WHERE id = 1;           -- 1 query per post author
+SELECT * FROM users WHERE id = 2;           --   (10 more queries)
+SELECT * FROM users WHERE id = 3;
+-- ... 7 more queries
+-- Total: 11 queries. With 100 posts, that is 101 queries.
+
+-- JOIN approach (CORRECT -- 1 query):
+SELECT posts.*, users.username
+FROM posts
+JOIN users ON posts.user_id = users.id
+LIMIT 10;
+-- Total: 1 query. Always 1 query, regardless of how many posts.
+```
+
+```
+# Why N+1 happens:
+# Your code loops through posts and fetches each author individually.
+# It feels natural but is catastrophic for performance.
+# Each query has overhead, even if the query itself is fast.
+# 1000 queries x 1ms each = 1 second of database overhead alone.
+
+# How to prevent it:
+# Always use JOINs when you need data from related tables.
+# ORMs like Drizzle make this easy with the relational query API.
+# Watch for loops that execute queries -- they are N+1 in disguise.
+```
+
+With Drizzle, the relational query API prevents N+1 problems:
+
+```typescript
+// Drizzle generates a single efficient query
+const postsWithAuthors = db.query.posts.findMany({
+  with: { author: true },
+  limit: 10,
+});
+```
+
+## Data Types: Choosing the Right Column Type
+
+Choosing the right data type matters for storage efficiency, query performance, and data integrity:
+
+```sql
+-- SQLite data types (simpler than PostgreSQL)
+TEXT       -- Strings of any length
+INTEGER    -- Whole numbers (also used for booleans: 0/1)
+REAL       -- Floating-point numbers
+BLOB       -- Binary data (files, images -- rarely used directly)
+
+-- Common patterns
+id          INTEGER PRIMARY KEY AUTOINCREMENT  -- Unique identifier
+username    TEXT NOT NULL                       -- Required string
+email       TEXT UNIQUE NOT NULL               -- Required, unique string
+age         INTEGER                            -- Optional number
+price       REAL                               -- Decimal number
+is_active   INTEGER DEFAULT 1                  -- Boolean (0 or 1)
+created_at  TEXT DEFAULT CURRENT_TIMESTAMP     -- ISO timestamp as text
+metadata    TEXT                               -- JSON stored as text
+```
+
+```
+# WRONG: Storing dates as integers (Unix timestamps)
+created_at INTEGER DEFAULT (strftime('%s', 'now'))
+# Hard to read in queries, hard to debug, timezone confusion
+
+# CORRECT: Storing dates as ISO 8601 text
+created_at TEXT DEFAULT CURRENT_TIMESTAMP
+# Human-readable: '2024-03-15 14:30:00'
+# Sortable as text (ISO 8601 sorts correctly)
+# Easy to parse in JavaScript: new Date(created_at)
+```
+
 ## Soft Deletes: An Alternative to DELETE
 
 In production systems, deleting data permanently is often a bad idea. You might need to recover it, audit it, or comply with data retention requirements. **Soft deletes** add a `deleted_at` column instead of removing the row:
@@ -661,6 +741,43 @@ UPDATE users SET deleted_at = NULL WHERE id = 1;
 ```
 
 This pattern is common in production applications where data recovery, audit trails, or compliance matters. The tradeoff is that every query must include `WHERE deleted_at IS NULL`, and your database grows over time. But the ability to recover accidentally deleted data is worth it.
+
+## WAL Mode: Unlocking SQLite Concurrency
+
+By default, SQLite uses a rollback journal for transaction safety. This means readers block writers and writers block readers. **Write-Ahead Logging (WAL)** mode changes this behavior dramatically:
+
+```sql
+-- Enable WAL mode (run once, persists across restarts)
+PRAGMA journal_mode = WAL;
+```
+
+```
+# Rollback journal (default):
+  Writer locks the ENTIRE database. No reads during writes.
+  Readers lock out writers. Only one operation at a time.
+
+# WAL mode:
+  Writes go to a separate log file.
+  Readers continue reading the old data while writes happen.
+  Multiple readers + one writer can operate simultaneously.
+
+  Result: 10-50x improvement in concurrent access patterns.
+  SvelteKit apps should ALWAYS enable WAL mode for SQLite.
+```
+
+In Drizzle, you enable WAL mode immediately after creating the connection:
+
+```typescript
+import Database from 'better-sqlite3';
+
+const sqlite = new Database('app.db');
+sqlite.pragma('journal_mode = WAL');      // Enable WAL
+sqlite.pragma('busy_timeout = 5000');     // Wait 5s instead of failing on lock
+sqlite.pragma('synchronous = NORMAL');    // Good balance of speed and safety
+sqlite.pragma('foreign_keys = ON');       // Enforce foreign key constraints
+```
+
+That `foreign_keys = ON` pragma deserves special attention. SQLite does **not** enforce foreign key constraints by default -- they are parsed but ignored. You must explicitly enable them on every connection. Forgetting this means your `REFERENCES` constraints are decorative, not functional. Drizzle does not enable this for you automatically.
 
 ## Try It
 

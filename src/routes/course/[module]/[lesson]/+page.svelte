@@ -1,7 +1,9 @@
 <script lang="ts">
 	import MetaTags from '$lib/components/seo/MetaTags.svelte';
+	import NoteCard from '$lib/components/notes/NoteCard.svelte';
+	import NoteComposer from '$lib/components/notes/NoteComposer.svelte';
 	import { enhance } from '$app/forms';
-	import { CheckCircle, ArrowRight, ArrowLeft, Play } from 'phosphor-svelte';
+	import { CheckCircle, ArrowRight, ArrowLeft, Play, Notebook, NotePencil, DownloadSimple } from 'phosphor-svelte';
 
 	let { data } = $props();
 
@@ -13,6 +15,9 @@
 	const starterCode = $derived(data.exercises?.[0]?.starterCode ?? '');
 	let editorCode = $state('');
 	let showEditor = $state(false);
+
+	// Notes state
+	let showNotes = $state(false);
 
 	$effect(() => {
 		editorCode = starterCode;
@@ -77,6 +82,47 @@
 			{/if}
 		</div>
 	{/if}
+
+	<!-- Notes Section -->
+	<div class="notes-section">
+		<div class="notes-header">
+			<h2>
+				<Notebook size={18} />
+				My Notes
+				{#if data.notes.length > 0}
+					<span class="notes-count">{data.notes.length}</span>
+				{/if}
+			</h2>
+			<div class="notes-header-actions">
+				{#if data.notes.length > 0}
+					<a
+						href="/api/notes/download?format=markdown&module={data.module.slug}&lesson={data.lesson.slug}"
+						class="btn-download-notes"
+						title="Download notes"
+					>
+						<DownloadSimple size={14} />
+					</a>
+				{/if}
+				<button class="btn-toggle-notes" onclick={() => showNotes = !showNotes}>
+					<NotePencil size={16} />
+					{showNotes ? 'Hide Notes' : 'Show Notes'}
+				</button>
+			</div>
+		</div>
+		{#if showNotes}
+			<NoteComposer />
+
+			{#if data.notes.length > 0}
+				<div class="notes-list">
+					{#each data.notes as note (note.id)}
+						<NoteCard {note} />
+					{/each}
+				</div>
+			{:else}
+				<p class="notes-empty">No notes yet. Start taking notes to remember key concepts!</p>
+			{/if}
+		{/if}
+	</div>
 
 	<!-- Completion & Navigation -->
 	<div class="lesson-footer">
@@ -224,6 +270,95 @@
 			border-right: none;
 			border-bottom: 1px solid var(--color-border);
 		}
+	}
+
+	/* Notes section */
+	.notes-section {
+		margin-bottom: var(--space-2xl);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-lg);
+		overflow: hidden;
+	}
+
+	.notes-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: var(--space-md) var(--space-lg);
+		background: var(--color-bg-secondary);
+		border-bottom: 1px solid var(--color-border);
+	}
+
+	.notes-header h2 {
+		display: flex;
+		align-items: center;
+		gap: var(--space-sm);
+		font-size: var(--text-base);
+		margin: 0;
+	}
+
+	.notes-count {
+		font-size: var(--text-xs);
+		background: var(--color-bg-tertiary);
+		padding: 1px 8px;
+		border-radius: var(--radius-full);
+		font-weight: 600;
+	}
+
+	.notes-header-actions {
+		display: flex;
+		align-items: center;
+		gap: var(--space-sm);
+	}
+
+	.btn-download-notes {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: var(--space-xs);
+		border-radius: var(--radius-md);
+		color: var(--color-text-muted);
+		transition: all var(--transition-fast);
+	}
+
+	.btn-download-notes:hover {
+		color: var(--color-brand);
+		background: var(--color-bg-tertiary);
+	}
+
+	.btn-toggle-notes {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-xs);
+		background: var(--color-brand);
+		color: white;
+		border: none;
+		padding: var(--space-xs) var(--space-md);
+		border-radius: var(--radius-md);
+		font-size: var(--text-sm);
+		font-weight: 600;
+		cursor: pointer;
+		font-family: inherit;
+		transition: all var(--transition-fast);
+	}
+
+	.btn-toggle-notes:hover {
+		background: var(--color-brand-dark);
+	}
+
+	.notes-list {
+		padding: var(--space-md) var(--space-lg);
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-sm);
+	}
+
+	.notes-empty {
+		padding: var(--space-xl) var(--space-lg);
+		text-align: center;
+		color: var(--color-text-muted);
+		font-size: var(--text-sm);
+		margin: 0;
 	}
 
 	/* Footer */

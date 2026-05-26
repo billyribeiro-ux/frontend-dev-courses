@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { courseModules } from '$lib/content/index.js';
-	import { CheckCircle, Circle, CaretRight, House, SignOut } from 'phosphor-svelte';
+	import { CheckCircle, Circle, CaretRight, House, SignOut, Notebook } from 'phosphor-svelte';
 	import type { UserProgress } from '$lib/types/index.js';
 
 	let { children, data } = $props();
@@ -49,6 +49,17 @@
 					Logout
 				</button>
 			</form>
+		</div>
+
+		<div class="sidebar-tools">
+			<a
+				href="/course/notes"
+				class="tool-link"
+				class:active={page.url.pathname === '/course/notes'}
+			>
+				<Notebook size={16} />
+				My Notes
+			</a>
 		</div>
 
 		<nav class="sidebar-nav">
@@ -128,6 +139,33 @@
 
 	.logout-btn:hover {
 		color: var(--color-error);
+	}
+
+	.sidebar-tools {
+		padding: var(--space-sm);
+		border-bottom: 1px solid var(--color-border);
+	}
+
+	.tool-link {
+		display: flex;
+		align-items: center;
+		gap: var(--space-sm);
+		padding: var(--space-xs) var(--space-sm);
+		border-radius: var(--radius-md);
+		font-size: var(--text-sm);
+		font-weight: 500;
+		color: var(--color-text-secondary);
+		transition: all var(--transition-fast);
+	}
+
+	.tool-link:hover {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text);
+	}
+
+	.tool-link.active {
+		background: var(--color-brand);
+		color: white;
 	}
 
 	.sidebar-nav {

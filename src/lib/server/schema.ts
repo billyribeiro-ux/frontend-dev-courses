@@ -31,6 +31,22 @@ export const progress = sqliteTable('progress', {
 	completedAt: text('completed_at')
 });
 
+export const notes = sqliteTable('notes', {
+	id: integer('id').primaryKey({ autoIncrement: true }),
+	userId: text('user_id')
+		.notNull()
+		.references(() => users.id, { onDelete: 'cascade' }),
+	moduleSlug: text('module_slug').notNull(),
+	lessonSlug: text('lesson_slug').notNull(),
+	content: text('content').notNull(),
+	createdAt: text('created_at')
+		.notNull()
+		.$defaultFn(() => new Date().toISOString()),
+	updatedAt: text('updated_at')
+		.notNull()
+		.$defaultFn(() => new Date().toISOString())
+});
+
 export const payments = sqliteTable('payments', {
 	id: integer('id').primaryKey({ autoIncrement: true }),
 	userId: text('user_id')

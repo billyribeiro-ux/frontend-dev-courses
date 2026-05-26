@@ -138,6 +138,18 @@ export const courseModules: Module[] = [
 		]
 	},
 	{
+		slug: '11b-schema-validation',
+		number: 53,
+		title: 'Schema Validation with Zod & Valibot',
+		description: 'Runtime validation, type inference, and the bridge between TypeScript and user input.',
+		phase: 2,
+		lessons: [
+			{ slug: '01-zod', number: 1, title: 'Schema Validation with Zod', description: 'Schemas, parsing, transforms, type inference, and error handling.', hasEditor: false },
+			{ slug: '02-valibot', number: 2, title: 'Valibot — The Tree-Shakable Alternative', description: 'Functional pipe API, validators, and Zod-to-Valibot migration.', hasEditor: false },
+			{ slug: '03-sveltekit-integration', number: 3, title: 'Schema Validation in SvelteKit', description: 'Shared schemas, form actions, API routes, and client-side validation.', hasEditor: false }
+		]
+	},
+	{
 		slug: '12-css-tokens',
 		number: 12,
 		title: 'CSS Custom Properties & Tokens',

@@ -229,11 +229,122 @@ export const activityLog = sqliteTable('activity_log', {
 
 **Why `position` columns on `columns` and `tasks`?** Kanban boards require ordered items. Without a `position` column, you would have to rely on `id` order (which breaks when items are reordered) or `createdAt` (which does not support manual ordering). The `position` integer lets you reorder items by updating a single number.
 
+A common implementation strategy is to assign positions in increments of 1000 (0, 1000, 2000, 3000). When a user drags a task between position 1000 and 2000, you assign it position 1500. This avoids renumbering the entire column on every drag. When positions get too fragmented (say, you need to insert between 1500 and 1501), run a batch renormalization that resets all positions to even intervals.
+
 **Why `boardId` on tasks in addition to `columnId`?** A task belongs to a column, and a column belongs to a board, so you could derive the board from `columnId`. But many queries need "all tasks on this board" without joining through columns. The denormalized `boardId` avoids an extra join on the most common query.
+
+This is a deliberate violation of database normalization (specifically 3NF). You trade a small amount of data integrity risk (if `columnId` and `boardId` become inconsistent, your data is corrupt) for significant query performance. In practice, the risk is negligible because you always update both fields together in the same transaction.
 
 **Why `metadata` as JSON in `activityLog`?** Different actions have different metadata: "task_moved" has `{ fromColumn, toColumn }`, "member_invited" has `{ email, role }`, "task_created" has `{ title, columnName }`. A JSON column is the right choice for this kind of polymorphic data -- it avoids creating separate tables for each action type.
 
+In SQLite with `mode: 'json'`, Drizzle automatically serializes/deserializes the JSON for you. You can query into JSON fields using SQLite's built-in `json_extract()` function if needed, though for most activity log queries you simply read the full object.
+
 **Why `slug` on teams instead of using `id` in URLs?** URLs like `/teams/3/boards/7` expose database internals and are not memorable. URLs like `/acme-corp/boards/sprint-1` are readable, shareable, and do not leak your user count. The `slug` column must be unique and is used as the URL parameter.
+
+**Why `mode: 'timestamp'` on date fields?** SQLite has no native DATE or DATETIME type. There are three common patterns: store as ISO 8601 strings, store as Unix timestamps (seconds), or store as Unix timestamps (milliseconds). Drizzle's `mode: 'timestamp'` stores dates as integer Unix timestamps and converts them to JavaScript `Date` objects when reading. This gives you correct date comparison (`WHERE created_at > ?`), correct sorting, and automatic `Date` objects in your TypeScript code.
+
+**Why `onDelete: 'cascade'` is NOT used everywhere?** You might expect that deleting a board should cascade-delete its columns and tasks. But cascade deletes are dangerous in production -- a single accidental deletion propagates instantly and irreversibly. For TeamBoard, we implement soft deletes in application code (an `isDeleted` boolean or a `deletedAt` timestamp) for boards and tasks, while using cascade only for truly dependent data like sessions (when a user is deleted, their sessions must go).
+
+### Relations
+
+Drizzle relations are declared separately from the schema. They do not generate SQL or affect the database -- they exist solely for Drizzle's relational query API, which lets you fetch nested data in a single call:
+
+```typescript
+import { relations } from 'drizzle-orm';
+
+export const teamsRelations = relations(teams, ({ one, many }) => ({
+  owner: one(users, {
+    fields: [teams.ownerId],
+    references: [users.id]
+  }),
+  members: many(teamMembers),
+  boards: many(boards),
+  activityLog: many(activityLog)
+}));
+
+export const boardsRelations = relations(boards, ({ one, many }) => ({
+  team: one(teams, {
+    fields: [boards.teamId],
+    references: [teams.id]
+  }),
+  columns: many(columns),
+  tasks: many(tasks)
+}));
+
+export const tasksRelations = relations(tasks, ({ one, many }) => ({
+  column: one(columns, {
+    fields: [tasks.columnId],
+    references: [columns.id]
+  }),
+  board: one(boards, {
+    fields: [tasks.boardId],
+    references: [boards.id]
+  }),
+  assignee: one(users, {
+    fields: [tasks.assigneeId],
+    references: [users.id]
+  }),
+  comments: many(comments)
+}));
+```
+
+With relations declared, you can write queries like this:
+
+```typescript
+const board = await db.query.boards.findFirst({
+  where: eq(boards.id, boardId),
+  with: {
+    columns: {
+      orderBy: [asc(columns.position)],
+      with: {
+        tasks: {
+          orderBy: [asc(tasks.position)],
+          with: { assignee: true }
+        }
+      }
+    }
+  }
+});
+```
+
+This single call replaces what would be four separate queries with manual data assembly. Drizzle generates efficient SQL under the hood.
+
+### TypeScript Types from Schema
+
+One of Drizzle's most valuable features is type inference. Instead of maintaining separate TypeScript interfaces that can drift from the schema, derive types directly:
+
+```typescript
+// src/lib/types/index.ts
+import type { InferSelectModel, InferInsertModel } from 'drizzle-orm';
+import type * as schema from '$server/schema';
+
+// What you get when reading from the database
+export type User = InferSelectModel<typeof schema.users>;
+export type Team = InferSelectModel<typeof schema.teams>;
+export type Board = InferSelectModel<typeof schema.boards>;
+export type Task = InferSelectModel<typeof schema.tasks>;
+export type Column = InferSelectModel<typeof schema.columns>;
+export type Comment = InferSelectModel<typeof schema.comments>;
+
+// What you provide when inserting
+export type NewTask = InferInsertModel<typeof schema.tasks>;
+export type NewComment = InferInsertModel<typeof schema.comments>;
+
+// Composite types for load function returns
+export type TaskWithAssignee = Task & {
+  assignee: Pick<User, 'id' | 'name' | 'avatarUrl'> | null;
+};
+
+export type ColumnWithTasks = Column & {
+  tasks: TaskWithAssignee[];
+};
+
+export type BoardWithColumns = Board & {
+  columns: ColumnWithTasks[];
+};
+```
+
+When you add a column to the schema, the TypeScript types update automatically. Every load function, form action, and component that uses these types gets type-checked against the new schema without any manual changes.
 
 ### WRONG: Using VARCHAR Lengths in SQLite
 

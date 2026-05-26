@@ -36,11 +36,12 @@ When your derived value requires multiple steps, use `$derived.by()` with a call
   let membershipTier = $state("gold");
 
   let orderSummary = $derived.by(() => {
+    // Step 1: Calculate subtotal
     const subtotal = cartItems.reduce(
       (sum, item) => sum + item.price * item.quantity, 0
     );
 
-    // Apply membership discount
+    // Step 2: Apply membership discount
     let discount = 0;
     if (membershipTier === "gold") {
       discount = subtotal * 0.10;
@@ -48,14 +49,15 @@ When your derived value requires multiple steps, use `$derived.by()` with a call
       discount = subtotal * 0.05;
     }
 
-    // Apply coupon
+    // Step 3: Apply coupon
     if (couponCode === "SAVE20") {
       discount += subtotal * 0.20;
     }
 
-    // Cap discount at subtotal
+    // Step 4: Cap discount at subtotal (never go negative)
     discount = Math.min(discount, subtotal);
 
+    // Step 5: Calculate final values
     const afterDiscount = subtotal - discount;
     const tax = afterDiscount * 0.08;
     const shipping = afterDiscount > 100 ? 0 : 9.99;
@@ -90,12 +92,12 @@ Use `$derived()` for simple expressions and `$derived.by()` when you need multip
 <script>
   let items = $state([1, 2, 3, 4, 5]);
 
-  // GOOD — simple enough for inline $derived
+  // GOOD -- simple enough for inline $derived
   let count = $derived(items.length);
   let sum = $derived(items.reduce((a, b) => a + b, 0));
   let average = $derived(sum / count);
 
-  // GOOD — too complex for inline, use $derived.by()
+  // GOOD -- too complex for inline, use $derived.by()
   let statistics = $derived.by(() => {
     if (items.length === 0) return { mean: 0, median: 0, stdDev: 0 };
 
@@ -107,7 +109,9 @@ Use `$derived()` for simple expressions and `$derived.by()` when you need multip
       ? sorted[mid]
       : (sorted[mid - 1] + sorted[mid]) / 2;
 
-    const variance = items.reduce((sum, val) => sum + (val - mean) ** 2, 0) / items.length;
+    const variance = items.reduce(
+      (sum, val) => sum + (val - mean) ** 2, 0
+    ) / items.length;
     const stdDev = Math.sqrt(variance);
 
     return { mean, median, stdDev };
@@ -124,7 +128,7 @@ Svelte 5 uses a **push-pull** reactivity model, and understanding it helps expla
 When a `$state()` value changes (e.g., `count++`), Svelte immediately **pushes** notifications to every signal that depends on it. This notification is cheap -- it just sets a "dirty" flag on each dependent. It does not recompute anything.
 
 ```
-count changes → mark `doubled` as dirty → mark `quadrupled` as dirty
+count changes -> mark `doubled` as dirty -> mark `quadrupled` as dirty
 ```
 
 The push is O(number of direct dependents) and involves no computation, just flag-setting.
@@ -261,10 +265,10 @@ When `selectedCategory` changes, the dependency graph propagates like this:
 
 ```
 selectedCategory changes
-  → filtered is dirty (depends on selectedCategory)
-    → sorted is dirty (depends on filtered)
-      → paginated is dirty (depends on sorted)
-    → totalPages is dirty (depends on filtered)
+  -> filtered is dirty (depends on selectedCategory)
+    -> sorted is dirty (depends on filtered)
+      -> paginated is dirty (depends on sorted)
+    -> totalPages is dirty (depends on filtered)
 ```
 
 During the pull phase (when the template renders), each value computes in topological order. `filtered` computes first, then `sorted` and `totalPages` (which both depend on `filtered`), then `paginated` (which depends on `sorted`).
@@ -298,6 +302,37 @@ When `items` changes, both `sum` and `count` are marked dirty, and then `average
 **No.** Svelte handles this correctly. During the pull phase, `average` is pulled once. It reads `sum` (which triggers sum's recomputation), then reads `count` (which triggers count's recomputation), and then computes itself. There is no double computation. The push-pull model naturally solves the diamond problem because the pull phase resolves all dependencies in a single pass.
 
 This is a significant advantage over "push-only" reactive systems (like early versions of MobX or Knockout), where diamond dependencies cause redundant recomputations unless you add explicit batching or scheduling.
+
+### WRONG: Collapsing the Chain into One Giant Derived
+
+```svelte
+<script>
+  // WRONG -- one massive $derived.by that does filtering, sorting, and pagination
+  let displayedProducts = $derived.by(() => {
+    let result = selectedCategory === "all"
+      ? products
+      : products.filter(p => p.category === selectedCategory);
+
+    result = [...result].sort((a, b) => {
+      if (sortField === "price") return a.price - b.price;
+      return a.name.localeCompare(b.name);
+    });
+
+    const total = Math.ceil(result.length / pageSize);
+    result = result.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+    return { items: result, totalPages: total };
+  });
+</script>
+```
+
+This works, but it has two problems:
+
+1. **Wasted computation**: When only `currentPage` changes, the entire chain (filtering + sorting + pagination) re-runs. With separate derived values, only `paginated` would recompute because `filtered` and `sorted` are not dirty.
+
+2. **No intermediate values**: Other parts of the UI might need `filtered.length` (to show "showing 3 of 5 products") or `sorted` (for an export feature). With one giant derived, you cannot access intermediate results.
+
+Separate derived values give you composability, performance, and reusability.
 
 ## $derived with Arrays and Objects: Reference vs Value Equality
 
@@ -335,17 +370,17 @@ If you need deep equality checking, you can implement it manually:
   let items = $state([/* large dataset */]);
   let searchTerm = $state('');
 
-  // Basic filter — creates new array on every search change
+  // Basic filter -- creates new array on every search change
   let filtered = $derived(
     items.filter(item => item.name.includes(searchTerm))
   );
 
-  // Memoized version — only "changes" if the result is actually different
+  // Memoized version -- only "changes" if the result is actually different
   let previousFiltered = $state([]);
   let stableFiltered = $derived.by(() => {
     const result = items.filter(item => item.name.includes(searchTerm));
 
-    // Shallow comparison — are the same items in the same order?
+    // Shallow comparison -- are the same items in the same order?
     if (
       result.length === previousFiltered.length &&
       result.every((item, i) => item === previousFiltered[i])
@@ -368,12 +403,12 @@ A cleaner approach is to let the downstream consumer handle it:
   let items = $state([/* large dataset */]);
   let searchTerm = $state('');
 
-  // Let the filter create a new array — it's cheap
+  // Let the filter create a new array -- it is cheap
   let filtered = $derived(
     items.filter(item => item.name.includes(searchTerm))
   );
 
-  // Expensive computation — only run when filtered.length changes
+  // Expensive computation -- only run when filtered.length changes
   let expensiveStats = $derived.by(() => {
     // This reads filtered.length (a primitive), not filtered (an array reference)
     // So it only recomputes when the count actually changes
@@ -396,22 +431,25 @@ The function inside `$derived.by()` should be a pure computation -- no side effe
   let query = $state('');
   let allProducts = $state([/* 10,000 products */]);
 
-  // WRONG — doing too much in one derived
+  // WRONG -- doing too much in one derived
   let displayData = $derived.by(() => {
     const filtered = allProducts.filter(p =>
       p.name.toLowerCase().includes(query.toLowerCase())
     );
-    const sorted = [...filtered].sort((a, b) => a.name.localeCompare(b.name));
+    const sorted = [...filtered].sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
     const paginated = sorted.slice(0, 50);
     const stats = {
       total: filtered.length,
-      avgPrice: filtered.reduce((s, p) => s + p.price, 0) / filtered.length || 0,
+      avgPrice: filtered.reduce((s, p) => s + p.price, 0)
+        / filtered.length || 0,
       categories: [...new Set(filtered.map(p => p.category))]
     };
     return { items: paginated, stats };
   });
 
-  // CORRECT — break into a chain so each step is independent and lazy
+  // CORRECT -- break into a chain so each step is independent and lazy
   let filtered = $derived(
     allProducts.filter(p =>
       p.name.toLowerCase().includes(query.toLowerCase())
@@ -426,7 +464,8 @@ The function inside `$derived.by()` should be a pure computation -- no side effe
 
   let stats = $derived.by(() => ({
     total: filtered.length,
-    avgPrice: filtered.reduce((s, p) => s + p.price, 0) / filtered.length || 0,
+    avgPrice: filtered.reduce((s, p) => s + p.price, 0)
+      / filtered.length || 0,
     categories: [...new Set(filtered.map(p => p.category))]
   }));
 </script>
@@ -449,7 +488,7 @@ Svelte's `$derived` itself cannot be debounced (it is synchronous by design), bu
   let debouncedQuery = $state('');
   let timeoutId: ReturnType<typeof setTimeout>;
 
-  // Debounce the query — derived values downstream use debouncedQuery
+  // Debounce the query -- derived values downstream use debouncedQuery
   $effect(() => {
     clearTimeout(timeoutId);
     timeoutId = setTimeout(() => {
@@ -463,7 +502,9 @@ Svelte's `$derived` itself cannot be debounced (it is synchronous by design), bu
 
   // This only recomputes when debouncedQuery changes (300ms after typing stops)
   let filtered = $derived(
-    products.filter(p => p.name.toLowerCase().includes(debouncedQuery.toLowerCase()))
+    products.filter(p =>
+      p.name.toLowerCase().includes(debouncedQuery.toLowerCase())
+    )
   );
 </script>
 
@@ -472,6 +513,102 @@ Svelte's `$derived` itself cannot be debounced (it is synchronous by design), bu
 ```
 
 The `$effect` is the right tool here because debouncing is a *side effect* (it involves a timer). The `$derived` downstream benefits because it only recomputes when `debouncedQuery` changes, not on every keystroke.
+
+### Derived State in .svelte.ts Modules
+
+Derived values work in `.svelte.ts` modules, enabling shared reactive computations outside of components:
+
+```typescript
+// src/lib/state/cart.svelte.ts
+
+interface CartItem {
+  id: string;
+  name: string;
+  price: number;
+  quantity: number;
+}
+
+let items = $state<CartItem[]>([]);
+
+// These derived values are available to any component that imports them
+let subtotal = $derived(
+  items.reduce((sum, item) => sum + item.price * item.quantity, 0)
+);
+
+let itemCount = $derived(
+  items.reduce((sum, item) => sum + item.quantity, 0)
+);
+
+let isEmpty = $derived(items.length === 0);
+
+let formattedTotal = $derived.by(() => {
+  const tax = subtotal * 0.08;
+  const shipping = subtotal > 100 ? 0 : 9.99;
+  const total = subtotal + tax + shipping;
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD'
+  }).format(total);
+});
+
+export function getCart() {
+  return {
+    get items() { return items; },
+    get subtotal() { return subtotal; },
+    get itemCount() { return itemCount; },
+    get isEmpty() { return isEmpty; },
+    get formattedTotal() { return formattedTotal; },
+
+    add(item: Omit<CartItem, 'quantity'>) {
+      const existing = items.find(i => i.id === item.id);
+      if (existing) {
+        existing.quantity++;
+      } else {
+        items.push({ ...item, quantity: 1 });
+      }
+    },
+
+    remove(id: string) {
+      items = items.filter(i => i.id !== id);
+    },
+
+    clear() {
+      items = [];
+    }
+  };
+}
+```
+
+### WRONG: Using Getters Without $derived in .svelte.ts
+
+```typescript
+// WRONG -- getter without $derived recomputes on every access
+export function getCart() {
+  return {
+    get subtotal() {
+      // This recomputes on EVERY read, not just when items change
+      return items.reduce(
+        (sum, item) => sum + item.price * item.quantity, 0
+      );
+    }
+  };
+}
+```
+
+```typescript
+// CORRECT -- $derived caches the result and only recomputes when dependencies change
+let subtotal = $derived(
+  items.reduce((sum, item) => sum + item.price * item.quantity, 0)
+);
+
+export function getCart() {
+  return {
+    get subtotal() { return subtotal; }  // Returns cached value
+  };
+}
+```
+
+Without `$derived`, the getter runs the `reduce` on every access. If the template reads `cart.subtotal` three times (once for display, once for a condition, once for a calculation), the reduce runs three times. With `$derived`, it runs once when `items` changes, and subsequent reads return the cached value.
 
 ## $derived vs $effect: The Critical Distinction
 
@@ -498,7 +635,9 @@ This is one of the most common points of confusion in Svelte 5. Both respond to 
   // WRONG: using $effect to compute a derived value
   let results = $state<string[]>([]);
   $effect(() => {
-    results = items.filter(item => item.includes(searchTerm.toLowerCase()));
+    results = items.filter(item =>
+      item.includes(searchTerm.toLowerCase())
+    );
   });
 </script>
 ```
@@ -520,7 +659,7 @@ This works but is wrong for five reasons:
   let searchTerm = $state("");
   let items = $state(["apple", "banana", "cherry", "date"]);
 
-  // CORRECT: filtering is a computation — use $derived
+  // CORRECT: filtering is a computation -- use $derived
   let results = $derived(
     items.filter(item => item.includes(searchTerm.toLowerCase()))
   );
@@ -534,24 +673,23 @@ This works but is wrong for five reasons:
   let searchTerm = $state("");
   let results = $derived(/* ... */);
 
-  // CORRECT: logging is a side effect — use $effect
+  // CORRECT: logging is a side effect -- use $effect
   $effect(() => {
-    console.log(`Search: "${searchTerm}" → ${results.length} results`);
+    console.log(`Search: "${searchTerm}" -> ${results.length} results`);
   });
 
-  // CORRECT: API call is a side effect — use $effect
+  // CORRECT: API call is a side effect -- use $effect
   $effect(() => {
     if (searchTerm.length >= 3) {
       fetch(`/api/search?q=${encodeURIComponent(searchTerm)}`)
         .then(res => res.json())
         .then(data => {
-          // Update state with server results
           serverResults = data;
         });
     }
   });
 
-  // CORRECT: DOM manipulation is a side effect — use $effect
+  // CORRECT: DOM manipulation is a side effect -- use $effect
   let canvas: HTMLCanvasElement;
   $effect(() => {
     const ctx = canvas.getContext('2d');
@@ -560,7 +698,7 @@ This works but is wrong for five reasons:
     // Draw based on reactive state...
   });
 
-  // CORRECT: timer is a side effect — use $effect
+  // CORRECT: timer is a side effect -- use $effect
   let isRunning = $state(false);
   let elapsed = $state(0);
   $effect(() => {
@@ -583,6 +721,38 @@ Ask yourself these questions in order:
 4. **Does this need cleanup (intervals, event listeners, subscriptions)?** Use `$effect` (return a cleanup function).
 
 If you are still unsure, try `$derived` first. If the compiler complains or you cannot express it as a pure computation, switch to `$effect`.
+
+### Async Data: The One Legitimate $effect + $state Pattern
+
+`$derived` is synchronous -- you cannot `await` inside it. For async operations, `$effect` + `$state` is the correct pattern:
+
+```svelte
+<script>
+  let searchTerm = $state("");
+  let serverResults = $state([]);
+
+  // CORRECT for async: use $effect to trigger, $state to store
+  $effect(() => {
+    const term = searchTerm;
+    if (!term || term.length < 3) {
+      serverResults = [];
+      return;
+    }
+
+    let cancelled = false;
+
+    fetch(`/api/search?q=${encodeURIComponent(term)}`)
+      .then(r => r.json())
+      .then(data => {
+        if (!cancelled) serverResults = data;
+      });
+
+    return () => { cancelled = true; };
+  });
+</script>
+```
+
+The `cancelled` flag in the cleanup function prevents stale results from overwriting fresh ones. Without it, if the user types "abc" then quickly types "xyz", the "abc" response might arrive after the "xyz" response and overwrite it.
 
 ## Complete Data Pipeline: Filters, Sorts, Pagination, and Statistics
 
@@ -631,7 +801,9 @@ Here is a complete example combining everything -- derived chains, `$derived.by(
 
   // Step 3: Filter by price range
   let priceFiltered = $derived(
-    categoryFiltered.filter(p => p.price >= minPrice && p.price <= maxPrice)
+    categoryFiltered.filter(p =>
+      p.price >= minPrice && p.price <= maxPrice
+    )
   );
 
   // Step 4: Sort
@@ -682,7 +854,7 @@ Here is a complete example combining everything -- derived chains, `$derived.by(
     selectedCategory;
     minPrice;
     maxPrice;
-    // Reset page — this is a side effect, so $effect is correct
+    // Reset page -- this is a side effect, so $effect is correct
     currentPage = 1;
   });
 </script>
@@ -698,7 +870,9 @@ Here is a complete example combining everything -- derived chains, `$derived.by(
 
     <select bind:value={selectedCategory}>
       {#each categories as cat}
-        <option value={cat}>{cat === "all" ? "All Categories" : cat}</option>
+        <option value={cat}>
+          {cat === "all" ? "All Categories" : cat}
+        </option>
       {/each}
     </select>
 
@@ -708,7 +882,9 @@ Here is a complete example combining everything -- derived chains, `$derived.by(
       <option value="rating">Sort by Rating</option>
     </select>
 
-    <button onclick={() => sortDirection = sortDirection === "asc" ? "desc" : "asc"}>
+    <button onclick={() =>
+      sortDirection = sortDirection === "asc" ? "desc" : "asc"
+    }>
       {sortDirection === "asc" ? "Ascending" : "Descending"}
     </button>
   </div>
@@ -852,7 +1028,7 @@ Bonus challenges:
 
 ## Key Takeaways
 
-- `$derived.by(() => { ... })` handles multi-step computations that do not fit in a single expression -- use it whenever you need variables, loops, or conditionals
+- **`$derived.by(() => { ... })`** handles multi-step computations that do not fit in a single expression -- use it whenever you need variables, loops, or conditionals
 - Svelte's **push-pull** model means derived values are **lazy** -- they are only recomputed when actually read by the template, an effect, or another derived value
 - The **diamond dependency problem** is solved automatically -- derived values at the bottom of a diamond compute exactly once per update cycle, not once per parent
 - Derived values are **memoized** -- multiple reads in the same render cycle return the cached result without recomputation

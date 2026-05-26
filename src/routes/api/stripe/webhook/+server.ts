@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types.js';
-import { stripe } from '$lib/server/stripe.js';
-import { STRIPE_WEBHOOK_SECRET } from '$env/static/private';
+import { getStripe } from '$lib/server/stripe.js';
+import { env } from '$env/dynamic/private';
 import { db } from '$lib/server/db.js';
 import { users, payments } from '$lib/server/schema.js';
 import { eq } from 'drizzle-orm';
@@ -16,7 +16,9 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	let event;
 	try {
-		event = stripe.webhooks.constructEvent(body, signature, STRIPE_WEBHOOK_SECRET);
+		const webhookSecret = env.STRIPE_WEBHOOK_SECRET;
+		if (!webhookSecret) return json({ error: 'Webhook secret not configured' }, { status: 500 });
+		event = getStripe().webhooks.constructEvent(body, signature, webhookSecret);
 	} catch (err) {
 		return json({ error: 'Invalid signature' }, { status: 400 });
 	}

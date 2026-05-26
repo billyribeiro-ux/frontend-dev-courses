@@ -1,6 +1,6 @@
 import { redirect } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types.js';
-import { stripe, COURSE_PRICE_CENTS } from '$lib/server/stripe.js';
+import { getStripe, COURSE_PRICE_CENTS } from '$lib/server/stripe.js';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) {
@@ -10,7 +10,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		redirect(302, '/course');
 	}
 
-	const paymentIntent = await stripe.paymentIntents.create({
+	const paymentIntent = await getStripe().paymentIntents.create({
 		amount: COURSE_PRICE_CENTS,
 		currency: 'usd',
 		metadata: {

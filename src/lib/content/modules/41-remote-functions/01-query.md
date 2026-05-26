@@ -1,14 +1,25 @@
 # Query Functions
 
-SvelteKit's load functions work well, but they create a tight coupling between data fetching and routing. Your `+page.server.ts` file must know about every piece of data the page needs, and child components cannot declare their own data dependencies. If a deeply nested component needs data from the server, you must thread it through props from the page level. Remote functions solve this by letting any component fetch server data directly.
+SvelteKit's load functions are the primary way to fetch data for pages, but they create a tight coupling between data fetching and routing. Your `+page.server.ts` file must know about every piece of data the page needs upfront, and child components cannot declare their own data dependencies. If a deeply nested component needs data from the server, you must thread it through props from the page level -- through every intermediate component in the tree. This is called prop drilling, and it gets worse as your component tree deepens.
 
-Remote functions run on the server but are called from components as if they were local. The compiler rewires the calls into HTTP requests behind the scenes. The `query` function from `$app/server` is the read-side of this system -- it fetches data and keeps it reactive.
+Remote functions solve this architectural problem. They let any component, anywhere in the tree, fetch server data directly. The compiler rewires the calls into HTTP requests behind the scenes, so from the developer's perspective, you are calling a function -- but that function executes on the server. The `query` function from `$app/server` is the read-side of this system. It fetches data, manages loading and error states, provides refresh capabilities, supports batching multiple queries into a single round trip, and can even stream real-time data from server to client.
 
-This is a paradigm shift. Instead of "pages own data, components receive props," you get "any component can declare its own server data needs." The framework handles the network boundary transparently.
+This lesson covers `query` in depth: how it works under the hood, how to validate arguments, how to manage UI states, and the advanced patterns (batching, live queries, caching) that make it production-ready.
+
+## The Mental Model: Functions That Cross the Network Boundary
+
+When you write a regular function in JavaScript, calling it means "execute this code in the same process, on the same machine." Remote functions change that contract. When you call a remote function from a component, the Svelte compiler has already rewritten that call into an HTTP request. The function body never ships to the browser -- it stays on the server. The arguments are serialized, sent over the network, deserialized on the server, the function executes, and the result travels back.
+
+This means remote functions are not regular functions, even though they look like them. They have network latency, they can fail (network errors, server errors), they are public HTTP endpoints (anyone can call them, not just your UI), and they must validate their inputs because you cannot trust data that arrived over a network.
+
+Understanding this mental model prevents three common mistakes:
+1. Passing non-serializable values (DOM elements, functions, class instances) as arguments
+2. Trusting arguments without validation (the server must treat all input as untrusted)
+3. Ignoring loading and error states (network calls are never instant or guaranteed)
 
 ## Enabling Remote Functions
 
-Remote functions are experimental. Enable them in your SvelteKit config:
+Remote functions are experimental. You must enable two separate settings: the `async` compiler option (which allows async component rendering) and the `remoteFunctions` kit option (which enables the server function infrastructure):
 
 ```javascript
 // svelte.config.js
@@ -28,28 +39,47 @@ const config = {
 export default config;
 ```
 
-Both settings are required. The `async` compiler option enables async component rendering (components can `await` directly in their script tag and use `{#await}` implicitly). The `remoteFunctions` option enables the server function infrastructure that rewires `.remote.ts` imports into HTTP calls.
+### Why Two Settings?
 
-### What Happens Under the Hood
+These are separate because they solve separate problems. The `async` compiler option changes how components render -- it allows `await` in the template and top-level `await` in `<script>` blocks. The `remoteFunctions` option creates the HTTP infrastructure for `.remote.ts` files. You could use `async` without remote functions (for other async patterns), but you cannot use remote functions without `async` because the component needs to handle the asynchronous nature of the network call.
 
-When you import a function from a `.remote.ts` file in a component:
+### WRONG: Enabling Only One Setting
 
-1. The compiler sees the `.remote.ts` import and replaces it with a client-side stub.
-2. The stub sends an HTTP request to a generated API endpoint when called.
-3. The server-side code runs in the endpoint handler, with full access to server APIs (database, file system, environment variables).
-4. The result is serialized and sent back to the client.
-5. The client stub deserializes the result and returns it to your component.
+```javascript
+// WRONG -- missing async compiler option
+const config = {
+  kit: {
+    experimental: {
+      remoteFunctions: true  // This alone is not enough
+    }
+  }
+};
+```
 
-This means `.remote.ts` files are never bundled into the client. They run exclusively on the server, just like `+page.server.ts` files. The difference is that they are not tied to a specific route.
+Without the `async` compiler option, your components cannot handle the asynchronous results of remote function calls. You will get a compiler error when trying to use the query result in an `{#await}` block or access `.current` on the returned object.
+
+```javascript
+// WRONG -- missing remoteFunctions
+const config = {
+  compilerOptions: {
+    experimental: {
+      async: true  // This alone is not enough
+    }
+  }
+};
+```
+
+Without `remoteFunctions`, the compiler does not know how to transform imports from `.remote.ts` files. The import will fail because `.remote.ts` is treated as a regular TypeScript file that runs in the browser, and it will try to import server-only modules like `$app/server` on the client.
 
 ## Creating a Remote File
 
-Remote functions live in `.remote.ts` files. These files run exclusively on the server -- the code never ships to the browser:
+Remote functions live in `.remote.ts` files. The `.remote.ts` extension tells the Svelte compiler that this file runs exclusively on the server -- the code is never bundled into the client JavaScript. This is enforced the same way `$lib/server` is enforced: importing from a `.remote.ts` file in client code is rewritten by the compiler into an HTTP call.
 
 ```typescript
 // src/lib/api/products.remote.ts
 import { query } from '$app/server';
 import { db } from '$lib/server/database';
+import { productsTable } from '$lib/server/schema';
 
 export const getProducts = query(async () => {
   const products = await db.select().from(productsTable);
@@ -78,43 +108,60 @@ Import and call the function from any component:
 {/await}
 ```
 
-No `+page.server.ts` needed. The component declares its own data dependency. This is especially powerful for reusable components that are used on multiple pages -- the component carries its data-fetching logic with it, rather than relying on each page to provide the right data.
+No `+page.server.ts` needed. The component declares its own data dependency. This is the fundamental shift: data fetching moves from the route level to the component level.
 
-### Organizing Remote Files
+### How the Compiler Transforms the Import
 
-A recommended project structure:
+When the Svelte compiler processes the component, it sees the import from a `.remote.ts` file and transforms it. The original import:
 
-```
-src/lib/api/
-  products.remote.ts      # Product queries
-  categories.remote.ts    # Category queries
-  users.remote.ts         # User queries
-  analytics.remote.ts     # Analytics queries
+```typescript
+import { getProducts } from '$lib/api/products.remote';
 ```
 
-Each file groups related queries. This is analogous to how you might organize API routes, but without the routing boilerplate.
+becomes something like:
+
+```typescript
+// Compiler-generated client-side stub
+const getProducts = (...args) =>
+  __svelte_remote_call('/api/_remote/products/getProducts', args);
+```
+
+The actual function body (`db.select().from(productsTable)`) stays on the server. The client only gets a thin stub that makes an HTTP request. This is why the approach is secure -- your database queries, secrets, and server-side logic never appear in the client bundle.
+
+### WRONG: Putting Query Functions in Regular .ts Files
+
+```typescript
+// WRONG -- src/lib/api/products.ts (not .remote.ts)
+// This file will be bundled into the client!
+import { query } from '$app/server';  // Error: $app/server is server-only
+import { db } from '$lib/server/database';  // Error: $lib/server is server-only
+```
+
+The `.remote.ts` extension is not a suggestion -- it is the mechanism that tells the compiler to keep this code on the server. Without it, the file is treated as regular client-side code, and importing server-only modules will fail.
 
 ## Argument Validation
 
-Remote functions accept arguments, but since they become HTTP endpoints, you must always validate the input. This is a security requirement, not a suggestion. Without validation, any client-side code (or any HTTP request) can send arbitrary data to your server function.
-
-Use Zod or Valibot to define a schema:
+Since remote functions become HTTP endpoints, anyone can call them -- not just your UI. A malicious user could craft requests with arbitrary arguments. You must always validate input using a schema library like Zod or Valibot.
 
 ```typescript
 // src/lib/api/products.remote.ts
 import { query } from '$app/server';
 import { db } from '$lib/server/database';
-import { eq, gte, lte, like, and } from 'drizzle-orm';
+import { productsTable } from '$lib/server/schema';
+import { eq, gte, lte, and } from 'drizzle-orm';
 import * as v from 'valibot';
 
 const SearchSchema = v.object({
   category: v.optional(v.string()),
-  minPrice: v.optional(v.number()),
-  maxPrice: v.optional(v.number()),
-  search: v.optional(v.pipe(v.string(), v.maxLength(200)))
+  minPrice: v.optional(v.pipe(v.number(), v.minValue(0))),
+  maxPrice: v.optional(v.pipe(v.number(), v.maxValue(1_000_000))),
+  page: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+  limit: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(100)))
 });
 
 export const searchProducts = query(SearchSchema, async (filters) => {
+  // 'filters' is fully typed and validated at this point.
+  // Invalid input (negative prices, limit > 100, etc.) never reaches this code.
   const conditions = [];
 
   if (filters.category) {
@@ -126,18 +173,18 @@ export const searchProducts = query(SearchSchema, async (filters) => {
   if (filters.maxPrice !== undefined) {
     conditions.push(lte(productsTable.price, filters.maxPrice));
   }
-  if (filters.search) {
-    conditions.push(like(productsTable.name, `%${filters.search}%`));
-  }
 
-  const products = await db
+  const page = filters.page ?? 1;
+  const limit = filters.limit ?? 20;
+
+  const results = await db
     .select()
     .from(productsTable)
     .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .orderBy(productsTable.name)
-    .limit(50);
+    .limit(limit)
+    .offset((page - 1) * limit);
 
-  return products;
+  return results;
 });
 ```
 
@@ -147,129 +194,65 @@ export const searchProducts = query(SearchSchema, async (filters) => {
 
   let category = $state('electronics');
   let minPrice = $state(0);
-  let maxPrice = $state(1000);
-  let search = $state('');
 
-  // Re-runs automatically when any parameter changes
-  const results = searchProducts({ category, minPrice, maxPrice, search });
+  // The query re-runs automatically when category or minPrice changes
+  const results = searchProducts({ category, minPrice });
 </script>
 ```
 
-The schema validates input on the server before your handler runs. Invalid arguments return an error rather than executing the query with bad data. This is defense in depth -- even if a malicious client crafts a custom request, the schema rejects invalid input.
+### How Reactive Arguments Work
 
-### Validation Details
+When you pass reactive state as arguments (like `{ category }` where `category` is `$state`), the query function tracks those dependencies. When `category` changes, the query automatically re-fetches with the new arguments. This is the same push-pull reactivity model that `$derived` uses -- the query is re-evaluated when its inputs change.
 
-When validation fails, the client receives an error object with details about what went wrong. The schema acts as both documentation and enforcement of the API contract.
+### WRONG: Skipping Validation
 
 ```typescript
-// Strict schema with transformations
-const CreateProductSchema = v.object({
-  name: v.pipe(v.string(), v.minLength(1), v.maxLength(200)),
-  price: v.pipe(v.number(), v.minValue(0), v.maxValue(999999)),
-  description: v.pipe(
-    v.string(),
-    v.maxLength(5000),
-    v.transform((s) => s.trim())
-  )
+// WRONG -- trusting raw input from the network
+export const searchProducts = query(
+  async (filters: { category: string; limit: number }) => {
+    // A malicious user could send limit: 999999999 and dump your entire database
+    // Or send category: "'; DROP TABLE products; --" for SQL injection
+    const results = await db
+      .select()
+      .from(productsTable)
+      .where(eq(productsTable.category, filters.category))
+      .limit(filters.limit);
+
+    return results;
+  }
+);
+```
+
+Without schema validation, you are trusting that the client sends well-formed data. This is a security vulnerability. Always validate with a schema that constrains every field -- string length, number ranges, enum values, required vs optional.
+
+### WRONG: Validating Inside the Handler Instead of via Schema
+
+```typescript
+// WRONG -- manual validation inside the handler
+export const searchProducts = query(async (filters: any) => {
+  if (typeof filters.category !== 'string') {
+    throw new Error('Invalid category');
+  }
+  if (filters.limit && (filters.limit < 1 || filters.limit > 100)) {
+    throw new Error('Invalid limit');
+  }
+  // ... 20 more lines of manual validation
 });
 ```
 
-The schema can also transform input (like trimming whitespace), ensuring your handler receives clean data.
-
-## Reactive Queries
-
-When you pass reactive values (like `$state` variables) as arguments to a query function, the query automatically re-runs when those values change. This is one of the most powerful features of remote functions:
-
-```svelte
-<script lang="ts">
-  import { searchProducts } from '$lib/api/products.remote';
-
-  let category = $state('all');
-  let sortBy = $state('name');
-  let page = $state(1);
-
-  // This query re-runs whenever category, sortBy, or page changes
-  const products = searchProducts({ category, sortBy, page });
-</script>
-
-<select bind:value={category}>
-  <option value="all">All Categories</option>
-  <option value="electronics">Electronics</option>
-  <option value="clothing">Clothing</option>
-</select>
-
-<select bind:value={sortBy}>
-  <option value="name">Name</option>
-  <option value="price">Price</option>
-  <option value="newest">Newest</option>
-</select>
-
-{#if products.loading}
-  <p>Loading...</p>
-{:else if products.error}
-  <p>Error: {products.error.message}</p>
-{:else}
-  <ul>
-    {#each products.current as product}
-      <li>{product.name} -- ${product.price}</li>
-    {/each}
-  </ul>
-{/if}
-
-<button disabled={page <= 1} onclick={() => page--}>Previous</button>
-<span>Page {page}</span>
-<button onclick={() => page++}>Next</button>
+```typescript
+// CORRECT -- schema-based validation
+export const searchProducts = query(SearchSchema, async (filters) => {
+  // 'filters' is already validated and typed
+  // No manual checks needed
+});
 ```
 
-When the user changes the category dropdown, SvelteKit automatically fires a new request with the updated parameters. The old request is aborted (if still in flight), and the UI shows the loading state while the new data loads.
-
-### Debouncing Reactive Queries
-
-For search inputs where the user types rapidly, you want to debounce the query to avoid firing a request on every keystroke. Since the query re-runs whenever its arguments change, debounce the state update, not the query:
-
-```svelte
-<script lang="ts">
-  import { searchProducts } from '$lib/api/products.remote';
-
-  let searchInput = $state('');
-  let debouncedSearch = $state('');
-  let debounceTimer: ReturnType<typeof setTimeout>;
-
-  // Debounce the search input
-  $effect(() => {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      debouncedSearch = searchInput;
-    }, 300);
-
-    return () => clearTimeout(debounceTimer);
-  });
-
-  // The query uses the debounced value, not the raw input
-  const results = searchProducts({ search: debouncedSearch });
-</script>
-
-<input
-  type="text"
-  bind:value={searchInput}
-  placeholder="Search products..."
-/>
-
-{#if results.loading}
-  <p>Searching...</p>
-{:else if results.current}
-  <p>{results.current.length} results</p>
-  {#each results.current as product}
-    <div>{product.name}</div>
-  {/each}
-{/if}
-```
-
-The query only fires when `debouncedSearch` changes, which is 300ms after the user stops typing. The raw `searchInput` updates on every keystroke (for immediate visual feedback in the input), but the expensive server query waits.
+The schema-based approach is superior for three reasons: (1) the error messages are standardized and informative, (2) the TypeScript type of `filters` is automatically inferred from the schema, and (3) the validation runs before your handler, so you never need to handle invalid state inside your business logic.
 
 ## Refresh, Loading, and Error States
 
-The object returned by `query` provides reactive properties for managing UI state without `{#await}`:
+The object returned by `query` is not a simple promise -- it is a reactive state container that provides everything you need to build loading/error/success UI:
 
 ```svelte
 <script lang="ts">
@@ -278,186 +261,233 @@ The object returned by `query` provides reactive properties for managing UI stat
   const products = getProducts();
 </script>
 
-{#if products.loading}
+{#if products.pending}
   <div class="skeleton-grid">
     {#each Array(6) as _}
-      <div class="skeleton-card">
-        <div class="skeleton-line" style="width: 80%; height: 1.2rem;"></div>
-        <div class="skeleton-line" style="width: 40%; height: 1rem;"></div>
-      </div>
+      <div class="skeleton-card animate-pulse"></div>
     {/each}
   </div>
 {:else if products.error}
-  <div class="error-card">
-    <h3>Failed to load products</h3>
-    <p>{products.error.message}</p>
+  <div class="error-banner" role="alert">
+    <p>Failed to load products: {products.error.message}</p>
     <button onclick={() => products.refresh()}>Try Again</button>
   </div>
 {:else}
   <ul>
     {#each products.current as product}
-      <li>{product.name} -- ${product.price}</li>
+      <li>{product.name}</li>
     {/each}
   </ul>
-{/if}
 
-<button onclick={() => products.refresh()} disabled={products.loading}>
-  {products.loading ? 'Refreshing...' : 'Refresh'}
-</button>
+  <button onclick={() => products.refresh()}>
+    Refresh
+  </button>
+{/if}
 ```
 
-The four properties:
+### The Returned Object's Properties
 
-- **`.current`** -- the resolved data (or `undefined` while loading for the first time). After the first load, `.current` retains the previous data during a refresh, so you can show stale data with a loading indicator.
-- **`.loading`** -- `true` while a request is in flight. This is true both during the initial load and during refreshes.
-- **`.error`** -- the error object if the query failed. It is `null` when the query succeeds.
-- **`.refresh()`** -- re-fetches the data from the server. Useful for "try again" buttons, pull-to-refresh, or periodic updates.
+- **`.current`** -- the most recent successfully resolved data, or `undefined` if the query has not completed yet. After a refresh, `.current` retains the previous data until the new data arrives (stale-while-revalidate pattern).
+- **`.pending`** -- `true` while the HTTP request is in flight. For initial loads, this is `true` until data arrives. For refreshes, this is `true` while fetching new data, but `.current` still holds the old data.
+- **`.error`** -- the error object if the query failed, or `undefined` if it succeeded. This is an `Error` instance with a `.message` property.
+- **`.refresh()`** -- re-fetches the data from the server. Returns a promise that resolves when the new data arrives.
 
-### Stale-While-Revalidate Pattern
+### Building a Reusable Query Wrapper Component
 
-A key UX insight: during a `.refresh()`, `.current` still holds the previous data. You can show the stale data with a subtle loading indicator, rather than replacing the content with a spinner:
+Since loading/error/success is a universal pattern, you can build a wrapper component:
+
+```svelte
+<!-- src/lib/components/QueryResult.svelte -->
+<script lang="ts" generics="T">
+  import type { Snippet } from 'svelte';
+
+  interface Props {
+    query: {
+      current: T | undefined;
+      pending: boolean;
+      error: Error | undefined;
+      refresh: () => void;
+    };
+    children: Snippet<[T]>;
+    loading?: Snippet;
+    error?: Snippet<[Error, () => void]>;
+  }
+
+  let { query, children, loading, error }: Props = $props();
+</script>
+
+{#if query.pending && !query.current}
+  {#if loading}
+    {@render loading()}
+  {:else}
+    <p>Loading...</p>
+  {/if}
+{:else if query.error && !query.current}
+  {#if error}
+    {@render error(query.error, query.refresh)}
+  {:else}
+    <p>Error: {query.error.message}</p>
+  {/if}
+{:else if query.current}
+  {@render children(query.current)}
+{/if}
+```
+
+Usage:
 
 ```svelte
 <script lang="ts">
+  import QueryResult from '$lib/components/QueryResult.svelte';
   import { getProducts } from '$lib/api/products.remote';
 
   const products = getProducts();
 </script>
 
-<div class:refreshing={products.loading && products.current}>
-  {#if products.current}
+<QueryResult query={products}>
+  {#snippet children(items)}
     <ul>
-      {#each products.current as product}
+      {#each items as product}
         <li>{product.name}</li>
       {/each}
     </ul>
-  {:else if products.loading}
-    <p>Loading...</p>
-  {/if}
-</div>
+  {/snippet}
 
-{#if products.loading && products.current}
-  <div class="refresh-indicator">Updating...</div>
-{/if}
+  {#snippet loading()}
+    <div class="skeleton-grid">Loading products...</div>
+  {/snippet}
 
-<style>
-  .refreshing { opacity: 0.6; pointer-events: none; }
-  .refresh-indicator {
-    position: fixed; top: 0; left: 50%; transform: translateX(-50%);
-    background: #3b82f6; color: white; padding: 4px 16px;
-    border-radius: 0 0 8px 8px; font-size: 0.85rem;
-  }
-</style>
+  {#snippet error(err, retry)}
+    <p>Failed: {err.message}</p>
+    <button onclick={retry}>Retry</button>
+  {/snippet}
+</QueryResult>
 ```
 
-The first load shows a spinner. Subsequent refreshes show the old data at reduced opacity with a "Updating..." banner. This is the stale-while-revalidate pattern that makes apps feel fast.
+## Using {#await} vs .current/.pending/.error
+
+You have two ways to handle query results in the template. The `{#await}` block treats the query as a promise:
+
+```svelte
+{#await products}
+  <p>Loading...</p>
+{:then items}
+  {#each items as product}
+    <li>{product.name}</li>
+  {/each}
+{:catch error}
+  <p>Error: {error.message}</p>
+{/await}
+```
+
+The `.current`/`.pending`/`.error` approach gives you more control, especially for stale-while-revalidate patterns:
+
+```svelte
+<!-- Show stale data with a loading indicator during refresh -->
+{#if products.pending}
+  <div class="refresh-indicator">Refreshing...</div>
+{/if}
+
+{#if products.current}
+  <ul class:opacity-50={products.pending}>
+    {#each products.current as product}
+      <li>{product.name}</li>
+    {/each}
+  </ul>
+{/if}
+```
+
+### WRONG: Showing a Full Loading Screen on Refresh
+
+```svelte
+<!-- WRONG -- replaces existing content with a loading spinner on refresh -->
+{#if products.pending}
+  <Spinner />
+{:else if products.current}
+  <ProductGrid products={products.current} />
+{/if}
+```
+
+When the user clicks "Refresh," the entire product grid disappears and a spinner replaces it. This is jarring. Use the stale-while-revalidate pattern: keep showing the old data (dimmed or with a small indicator) while fresh data loads in the background.
 
 ## Batching Queries
 
-When multiple queries fire simultaneously, `query.batch` combines them into a single HTTP request. This solves the waterfall problem where multiple components each make their own server call:
+When multiple queries fire simultaneously, `query.batch` combines them into a single HTTP request. Without batching, four components each fetching data would create four separate round trips, each with its own TCP connection setup, HTTP overhead, and server processing:
 
 ```typescript
-// src/lib/api/dashboard.remote.ts
+// src/lib/api/weather.remote.ts
 import { query } from '$app/server';
-import { db } from '$lib/server/database';
+import * as v from 'valibot';
 
-export const getRevenueStats = query(async () => {
-  const result = await db.select({
-    totalRevenue: sql`SUM(amount)`,
-    orderCount: sql`COUNT(*)`,
-    averageOrder: sql`AVG(amount)`
-  }).from(ordersTable);
-  return result[0];
+const CitySchema = v.object({
+  city: v.string()
 });
 
-export const getTopProducts = query(async () => {
-  return await db
-    .select({
-      name: productsTable.name,
-      totalSold: sql`SUM(${orderItemsTable.quantity})`,
-      revenue: sql`SUM(${orderItemsTable.quantity} * ${orderItemsTable.price})`
-    })
-    .from(orderItemsTable)
-    .innerJoin(productsTable, eq(orderItemsTable.productId, productsTable.id))
-    .groupBy(productsTable.name)
-    .orderBy(sql`SUM(${orderItemsTable.quantity}) DESC`)
-    .limit(10);
-});
-
-export const getRecentOrders = query(async () => {
-  return await db
-    .select()
-    .from(ordersTable)
-    .orderBy(desc(ordersTable.createdAt))
-    .limit(20);
+export const getWeather = query(CitySchema, async ({ city }) => {
+  const res = await fetch(`https://api.weather.example/${city}`);
+  return res.json();
 });
 ```
 
 ```svelte
 <script lang="ts">
   import { query } from '$app/server';
-  import { getRevenueStats, getTopProducts, getRecentOrders } from '$lib/api/dashboard.remote';
+  import { getWeather } from '$lib/api/weather.remote';
 
-  // All three queries are batched into a single HTTP request
-  const [stats, topProducts, orders] = query.batch([
-    getRevenueStats(),
-    getTopProducts(),
-    getRecentOrders()
-  ]);
+  const cities = ['London', 'Paris', 'Tokyo', 'New York'];
+
+  // All four requests are batched into a single HTTP call
+  const weatherData = query.batch(
+    cities.map((city) => getWeather({ city }))
+  );
 </script>
 
-{#await Promise.all([stats, topProducts, orders])}
-  <p>Loading dashboard...</p>
-{:then [revenue, products, recentOrders]}
-  <div class="dashboard-grid">
-    <div class="stat-card">
-      <h3>Revenue</h3>
-      <p class="stat-value">${revenue.totalRevenue.toLocaleString()}</p>
-      <p class="stat-label">{revenue.orderCount} orders (avg ${revenue.averageOrder.toFixed(2)})</p>
+{#await weatherData}
+  <p>Loading weather data...</p>
+{:then results}
+  {#each results as weather, i}
+    <div class="weather-card">
+      <h3>{cities[i]}</h3>
+      <p>{weather.temp} C -- {weather.condition}</p>
     </div>
-
-    <div class="top-products">
-      <h3>Top Products</h3>
-      <ol>
-        {#each products as product}
-          <li>
-            <span>{product.name}</span>
-            <span>{product.totalSold} sold (${product.revenue.toLocaleString()})</span>
-          </li>
-        {/each}
-      </ol>
-    </div>
-
-    <div class="recent-orders">
-      <h3>Recent Orders</h3>
-      <table>
-        <thead><tr><th>Order</th><th>Amount</th><th>Date</th></tr></thead>
-        <tbody>
-          {#each recentOrders as order}
-            <tr>
-              <td>#{order.id}</td>
-              <td>${order.amount.toFixed(2)}</td>
-              <td>{new Date(order.createdAt).toLocaleDateString()}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-  </div>
+  {/each}
 {/await}
 ```
 
-Without batching, three components fetching data would make three separate round trips to the server. With `query.batch`, they share a single request. The server receives all three queries in one HTTP call, executes them (potentially in parallel), and returns all results in a single response.
+### How Batching Works Under the Hood
 
-### When Batching Matters
+Without batching, four calls to `getWeather()` would produce four HTTP requests:
 
-Batching is most impactful when:
+```
+POST /api/_remote/weather/getWeather  { city: "London" }
+POST /api/_remote/weather/getWeather  { city: "Paris" }
+POST /api/_remote/weather/getWeather  { city: "Tokyo" }
+POST /api/_remote/weather/getWeather  { city: "New York" }
+```
 
-1. **Multiple components on the same page each need server data.** Without batching, each component makes its own request, creating a waterfall of sequential HTTP calls.
-2. **The server is geographically distant.** Each round trip adds latency. Batching reduces the number of round trips.
-3. **The queries are independent.** Batched queries run in parallel on the server, so the total time is the time of the slowest query, not the sum of all queries.
+With `query.batch`, the runtime combines them into a single request:
 
-Batching is automatic within a single page render. If you do not call `query.batch` explicitly, queries that fire during the same render cycle may still be batched automatically by the framework.
+```
+POST /api/_remote/_batch  [
+  { fn: "weather/getWeather", args: { city: "London" } },
+  { fn: "weather/getWeather", args: { city: "Paris" } },
+  { fn: "weather/getWeather", args: { city: "Tokyo" } },
+  { fn: "weather/getWeather", args: { city: "New York" } }
+]
+```
+
+The server executes all four functions (potentially in parallel), collects the results, and sends them back in a single response. This reduces network overhead dramatically -- especially on high-latency connections (mobile networks, users far from the server).
+
+### When to Use Batching
+
+Use `query.batch` when:
+- A page renders multiple instances of the same component, each fetching different data
+- A dashboard displays data from multiple sources simultaneously
+- A list view pre-fetches details for visible items
+
+Do not use batching when:
+- Queries depend on each other (one query's result determines another query's arguments)
+- Queries have vastly different response times (a fast query is held back by a slow one)
+- You want independent error handling per query (a batch either succeeds or fails as a unit)
 
 ## Live Queries
 
@@ -467,6 +497,8 @@ Batching is automatic within a single page render. If you do not call `query.bat
 // src/lib/api/notifications.remote.ts
 import { query } from '$app/server';
 import { db } from '$lib/server/database';
+import { notificationsTable } from '$lib/server/schema';
+import { eq, desc } from 'drizzle-orm';
 
 export const getNotifications = query.live(async function* (userId: string) {
   while (true) {
@@ -479,7 +511,7 @@ export const getNotifications = query.live(async function* (userId: string) {
 
     yield notifications;
 
-    // Wait before checking for new data
+    // Wait 3 seconds before polling again
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
 });
@@ -495,528 +527,188 @@ On the client side, the returned object updates automatically as the server yiel
   const notifications = getNotifications(userId);
 </script>
 
-{#if notifications.connected}
-  <span class="status live">Live</span>
-{:else}
-  <span class="status offline">Disconnected</span>
-  <button onclick={() => notifications.reconnect()}>Reconnect</button>
-{/if}
-
-{#each notifications.current ?? [] as note}
-  <div class="notification" class:unread={!note.read}>
-    <p>{note.message}</p>
-    <time>{new Date(note.createdAt).toLocaleString()}</time>
-  </div>
-{:else}
-  <p>No notifications yet.</p>
-{/each}
-
-<style>
-  .status { padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; }
-  .live { background: #d1fae5; color: #065f46; }
-  .offline { background: #fef2f2; color: #991b1b; }
-  .notification { padding: 12px; border-bottom: 1px solid #e5e7eb; }
-  .unread { background: #f0f9ff; }
-</style>
-```
-
-The object returned by `query.live` includes two properties for connection management:
-
-- **`.connected`** -- a reactive boolean that is `true` while the streaming connection is active
-- **`.reconnect()`** -- re-establishes the connection after a disconnection or network interruption
-
-### Live Query Architecture
-
-Under the hood, `query.live` uses server-sent events (SSE) or a similar streaming protocol. The server holds the connection open and pushes data whenever the generator yields. The client-side stub receives each chunk and updates `.current` reactively.
-
-The server controls the yield frequency, so you can tune how often updates are pushed without changing client code. For a stock ticker, you might yield every 100ms. For notifications, every 3-5 seconds is sufficient.
-
-### Real-Time Dashboard Example
-
-A complete live dashboard card with auto-updating metrics:
-
-```typescript
-// src/lib/api/metrics.remote.ts
-import { query } from '$app/server';
-import { db } from '$lib/server/database';
-
-export const getLiveMetrics = query.live(async function* () {
-  while (true) {
-    const now = new Date();
-    const oneMinuteAgo = new Date(now.getTime() - 60_000);
-    const oneHourAgo = new Date(now.getTime() - 3_600_000);
-
-    const [minuteStats] = await db.select({
-      requestCount: sql`COUNT(*)`,
-      errorCount: sql`COUNT(*) FILTER (WHERE status >= 400)`,
-      avgResponseTime: sql`AVG(response_time_ms)`
-    })
-    .from(requestLogsTable)
-    .where(gte(requestLogsTable.timestamp, oneMinuteAgo));
-
-    const [hourStats] = await db.select({
-      totalRequests: sql`COUNT(*)`,
-      uniqueUsers: sql`COUNT(DISTINCT user_id)`,
-      revenue: sql`COALESCE(SUM(amount), 0)`
-    })
-    .from(requestLogsTable)
-    .leftJoin(ordersTable, eq(requestLogsTable.orderId, ordersTable.id))
-    .where(gte(requestLogsTable.timestamp, oneHourAgo));
-
-    yield {
-      timestamp: now.toISOString(),
-      requestsPerMinute: minuteStats.requestCount,
-      errorsPerMinute: minuteStats.errorCount,
-      avgResponseTimeMs: Math.round(minuteStats.avgResponseTime ?? 0),
-      totalRequestsHour: hourStats.totalRequests,
-      uniqueUsersHour: hourStats.uniqueUsers,
-      revenueHour: hourStats.revenue
-    };
-
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-  }
-});
-```
-
-```svelte
-<script lang="ts">
-  import { getLiveMetrics } from '$lib/api/metrics.remote';
-
-  const metrics = getLiveMetrics();
-
-  // Track previous values for trend indicators
-  let previousRPM = $state(0);
-  let rpmTrend = $derived.by(() => {
-    const current = metrics.current?.requestsPerMinute ?? 0;
-    const trend = current > previousRPM ? 'up' : current < previousRPM ? 'down' : 'stable';
-    // Update previous for next comparison (side effect, so use $effect instead in production)
-    return trend;
-  });
-</script>
-
-<div class="metrics-grid">
-  {#if metrics.current}
-    {@const m = metrics.current}
-
-    <div class="metric-card">
-      <span class="metric-label">Requests/min</span>
-      <span class="metric-value">{m.requestsPerMinute}</span>
-    </div>
-
-    <div class="metric-card" class:danger={m.errorsPerMinute > 5}>
-      <span class="metric-label">Errors/min</span>
-      <span class="metric-value">{m.errorsPerMinute}</span>
-    </div>
-
-    <div class="metric-card" class:warning={m.avgResponseTimeMs > 500}>
-      <span class="metric-label">Avg Response</span>
-      <span class="metric-value">{m.avgResponseTimeMs}ms</span>
-    </div>
-
-    <div class="metric-card">
-      <span class="metric-label">Users (1hr)</span>
-      <span class="metric-value">{m.uniqueUsersHour}</span>
-    </div>
-
-    <div class="metric-card">
-      <span class="metric-label">Revenue (1hr)</span>
-      <span class="metric-value">${Number(m.revenueHour).toLocaleString()}</span>
-    </div>
-
-    <p class="last-update">
-      Last update: {new Date(m.timestamp).toLocaleTimeString()}
-      {#if metrics.connected}
-        <span class="live-dot"></span>
-      {/if}
-    </p>
+<div class="notification-header">
+  {#if notifications.connected}
+    <span class="status-dot bg-green-500"></span>
+    <span>Live</span>
   {:else}
-    <p>Loading metrics...</p>
+    <span class="status-dot bg-red-500"></span>
+    <span>Disconnected</span>
+    <button onclick={() => notifications.reconnect()}>Reconnect</button>
   {/if}
 </div>
 
-{#if !metrics.connected}
-  <div class="reconnect-banner">
-    Connection lost.
-    <button onclick={() => metrics.reconnect()}>Reconnect</button>
+{#each notifications.current ?? [] as note}
+  <div class="notification">
+    <p>{note.message}</p>
+    <time>{note.createdAt}</time>
   </div>
-{/if}
-
-<style>
-  .metrics-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 16px;
-  }
-  .metric-card {
-    padding: 16px; background: #f8fafc;
-    border-radius: 8px; text-align: center;
-  }
-  .metric-label { font-size: 0.8rem; color: #64748b; display: block; }
-  .metric-value { font-size: 1.8rem; font-weight: 700; color: #1e293b; }
-  .danger .metric-value { color: #dc2626; }
-  .warning .metric-value { color: #d97706; }
-  .live-dot {
-    display: inline-block; width: 8px; height: 8px;
-    background: #22c55e; border-radius: 50;
-    animation: pulse 2s infinite;
-  }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
-  }
-  .reconnect-banner {
-    background: #fef2f2; color: #991b1b; padding: 8px 16px;
-    border-radius: 8px; text-align: center; margin-top: 16px;
-  }
-</style>
+{/each}
 ```
+
+### Live Query Properties
+
+The object returned by `query.live` includes two additional properties beyond the standard query result:
+
+- **`.connected`** -- a reactive boolean that is `true` while the streaming connection is active. It becomes `false` when the connection drops (network failure, server restart, tab backgrounded).
+- **`.reconnect()`** -- re-establishes the connection after a disconnection. Call this from a "Reconnect" button or from a `$effect` that watches `.connected`.
+
+### How Live Queries Work Under the Hood
+
+Live queries use Server-Sent Events (SSE) under the hood. When the client calls a live query function, the runtime opens an SSE connection to the server. The server executes the async generator, and each `yield` sends an SSE event to the client with the serialized data. The client runtime deserializes the data and updates `.current`.
+
+This means live queries have the same characteristics as SSE:
+- Unidirectional (server to client only)
+- Automatic reconnection by the browser if the connection drops
+- Works through most proxies and firewalls (unlike WebSockets)
+- Text-based, so binary data must be base64-encoded
+
+### WRONG: Polling with setInterval Instead of Live Queries
+
+```svelte
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { getNotifications } from '$lib/api/notifications.remote';
+
+  let notifications = $state([]);
+
+  // WRONG -- manual polling is fragile and wasteful
+  onMount(() => {
+    const interval = setInterval(async () => {
+      try {
+        const result = await getNotifications(userId);
+        notifications = result;
+      } catch (e) {
+        // Error handling? Reconnection logic? Backoff?
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  });
+</script>
+```
+
+Manual polling requires you to build your own error handling, reconnection logic, and exponential backoff. `query.live` handles all of this for you, plus it uses SSE's built-in reconnection, and the server controls the yield frequency so you can tune it without changing client code.
 
 ### When to Use Live Queries
 
-Live queries are appropriate for:
+Live queries are ideal for:
+- **Notification feeds** -- new notifications appear without page refresh
+- **Dashboard metrics** -- charts and numbers update in real time
+- **Collaborative indicators** -- "3 people viewing this board"
+- **Activity logs** -- new entries appear as they happen
+- **Status monitoring** -- server health, deployment progress, CI/CD pipelines
 
-- **Dashboards** -- metrics, analytics, system health
-- **Notification feeds** -- new messages, alerts, status updates
-- **Collaborative features** -- who is online, typing indicators, shared cursors
-- **Order/shipping tracking** -- real-time status updates
-- **Chat applications** -- message streams
-
-They are not appropriate for:
-
-- **Infrequently changing data** -- use regular queries with manual refresh
-- **User-initiated data** -- forms, searches (use regular queries triggered by user action)
-- **Large datasets** -- streaming thousands of records per second is expensive
+Live queries are not ideal for:
+- **Chat messages** -- WebSockets provide lower latency and bidirectional communication
+- **Collaborative editing** -- CRDTs or OT require bidirectional real-time sync
+- **High-frequency data** -- stock tickers at 60fps are better served by WebSockets
 
 ## Caching and Deduplication
 
 Queries are deduplicated within a single page render. If two components on the same page call `getProducts()` with the same arguments, they receive the same object -- not two separate server requests:
 
 ```svelte
-<!-- ProductList.svelte -->
+<!-- ProductHeader.svelte -->
 <script lang="ts">
   import { getProducts } from '$lib/api/products.remote';
-  const products = getProducts(); // Request #1
+  const products = getProducts();
+  // Uses the first request's result
 </script>
 
-<!-- ProductCount.svelte (sibling component on same page) -->
+<!-- ProductGrid.svelte -->
 <script lang="ts">
   import { getProducts } from '$lib/api/products.remote';
-  const products = getProducts(); // Same object as #1, no new request
+  const products = getProducts();
+  // Same call, same arguments = same request, same object
 </script>
 ```
 
-This means you can call query functions freely without worrying about redundant fetches. Each component declares its own data needs, and the framework deduplicates behind the scenes.
+### How Deduplication Works
 
-### Cache Behavior Details
+The runtime tracks active queries by a key derived from the function name and the serialized arguments. When a second call matches an existing key, the runtime returns the same reactive object instead of making a new HTTP request. This means:
 
-1. **Same arguments = same query.** The deduplication key is the function reference plus the serialized arguments. `getProducts()` and `getProducts({ category: 'all' })` are different queries.
-2. **Cache lifetime.** By default, the cache lives for the duration of the page render. Navigating to a new page clears it.
-3. **Manual invalidation.** Calling `.refresh()` bypasses the cache and fetches fresh data.
-4. **Server-side caching.** You can add caching on the server side too -- either in-memory (for development) or with Redis/Memcached (for production).
+1. Both components share the same `.current`, `.pending`, and `.error` state
+2. If one component calls `.refresh()`, both components see the updated data
+3. The server processes only one request, not two
 
-### Server-Side Caching Pattern
-
-For expensive queries, add a caching layer on the server:
-
-```typescript
-// src/lib/api/analytics.remote.ts
-import { query } from '$app/server';
-import { db } from '$lib/server/database';
-
-// Simple in-memory cache with TTL
-const cache = new Map<string, { data: any; expiresAt: number }>();
-
-function withCache<T>(key: string, ttlMs: number, fn: () => Promise<T>): Promise<T> {
-  const cached = cache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
-    return Promise.resolve(cached.data);
-  }
-
-  return fn().then((data) => {
-    cache.set(key, { data, expiresAt: Date.now() + ttlMs });
-    return data;
-  });
-}
-
-export const getMonthlyRevenue = query(async () => {
-  return withCache('monthly-revenue', 60_000, async () => {
-    // This expensive query runs at most once per minute
-    return await db.select({
-      month: sql`DATE_TRUNC('month', created_at)`,
-      revenue: sql`SUM(amount)`,
-      orders: sql`COUNT(*)`
-    })
-    .from(ordersTable)
-    .groupBy(sql`DATE_TRUNC('month', created_at)`)
-    .orderBy(sql`DATE_TRUNC('month', created_at) DESC`)
-    .limit(12);
-  });
-});
-```
-
-This is a server-side optimization that reduces database load. The client-side deduplication handles the case where multiple components want the same data simultaneously. The server-side cache handles the case where the same query is called repeatedly over time.
-
-## Complete Data Dashboard
-
-Here is a complete example that combines regular queries, batched queries, live queries, and all the UI patterns:
-
-```typescript
-// src/lib/api/dashboard.remote.ts
-import { query } from '$app/server';
-import { db } from '$lib/server/database';
-import * as v from 'valibot';
-
-// Regular queries with validation
-const DateRangeSchema = v.object({
-  startDate: v.pipe(v.string(), v.isoDate()),
-  endDate: v.pipe(v.string(), v.isoDate())
-});
-
-export const getRevenueTrend = query(DateRangeSchema, async ({ startDate, endDate }) => {
-  return await db.select({
-    date: sql`DATE(created_at)`,
-    revenue: sql`SUM(amount)`,
-    orders: sql`COUNT(*)`
-  })
-  .from(ordersTable)
-  .where(
-    and(
-      gte(ordersTable.createdAt, new Date(startDate)),
-      lte(ordersTable.createdAt, new Date(endDate))
-    )
-  )
-  .groupBy(sql`DATE(created_at)`)
-  .orderBy(sql`DATE(created_at)`);
-});
-
-export const getTopCategories = query(async () => {
-  return await db.select({
-    category: productsTable.category,
-    totalRevenue: sql`SUM(${orderItemsTable.price} * ${orderItemsTable.quantity})`,
-    itemsSold: sql`SUM(${orderItemsTable.quantity})`
-  })
-  .from(orderItemsTable)
-  .innerJoin(productsTable, eq(orderItemsTable.productId, productsTable.id))
-  .groupBy(productsTable.category)
-  .orderBy(sql`SUM(${orderItemsTable.price} * ${orderItemsTable.quantity}) DESC`)
-  .limit(5);
-});
-
-// Live query for real-time data
-export const getLiveOrderCount = query.live(async function* () {
-  while (true) {
-    const [result] = await db.select({
-      count: sql`COUNT(*)`
-    })
-    .from(ordersTable)
-    .where(gte(ordersTable.createdAt, sql`NOW() - INTERVAL '24 hours'`));
-
-    yield { count: result.count, timestamp: new Date().toISOString() };
-    await new Promise((resolve) => setTimeout(resolve, 10_000));
-  }
-});
-```
+### WRONG: Trying to Prevent Duplicate Queries Manually
 
 ```svelte
-<!-- src/routes/dashboard/+page.svelte -->
 <script lang="ts">
-  import {
-    getRevenueTrend,
-    getTopCategories,
-    getLiveOrderCount
-  } from '$lib/api/dashboard.remote';
-  import { query } from '$app/server';
+  // WRONG -- manual dedup adds complexity with no benefit
+  import { getContext, setContext } from 'svelte';
+  import { getProducts } from '$lib/api/products.remote';
 
-  // Date range state
-  let startDate = $state(
-    new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-  );
-  let endDate = $state(
-    new Date().toISOString().split('T')[0]
-  );
-
-  // Regular query with reactive parameters
-  const revenue = getRevenueTrend({ startDate, endDate });
-
-  // Static query
-  const categories = getTopCategories();
-
-  // Live query
-  const liveOrders = getLiveOrderCount();
+  // Check if parent already fetched products
+  let products = getContext('products');
+  if (!products) {
+    products = getProducts();
+    setContext('products', products);
+  }
 </script>
-
-<h1>Dashboard</h1>
-
-<!-- Live counter -->
-<div class="live-counter">
-  {#if liveOrders.current}
-    <span class="counter-value">{liveOrders.current.count}</span>
-    <span class="counter-label">orders in the last 24h</span>
-    {#if liveOrders.connected}
-      <span class="live-badge">LIVE</span>
-    {/if}
-  {:else}
-    <span class="counter-value">--</span>
-    <span class="counter-label">Loading...</span>
-  {/if}
-</div>
-
-<!-- Date range picker -->
-<div class="date-range">
-  <input type="date" bind:value={startDate} />
-  <span>to</span>
-  <input type="date" bind:value={endDate} />
-  <button onclick={() => revenue.refresh()} disabled={revenue.loading}>
-    Refresh
-  </button>
-</div>
-
-<!-- Revenue trend -->
-<section>
-  <h2>Revenue Trend</h2>
-  {#if revenue.loading && !revenue.current}
-    <div class="skeleton" style="height: 200px;"></div>
-  {:else if revenue.error}
-    <p class="error">Failed to load revenue data: {revenue.error.message}</p>
-  {:else if revenue.current}
-    <div class="chart" class:loading={revenue.loading}>
-      <table>
-        <thead><tr><th>Date</th><th>Revenue</th><th>Orders</th></tr></thead>
-        <tbody>
-          {#each revenue.current as day}
-            <tr>
-              <td>{new Date(day.date).toLocaleDateString()}</td>
-              <td>${Number(day.revenue).toLocaleString()}</td>
-              <td>{day.orders}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-  {/if}
-</section>
-
-<!-- Top categories -->
-<section>
-  <h2>Top Categories</h2>
-  {#if categories.loading}
-    <p>Loading...</p>
-  {:else if categories.current}
-    {#each categories.current as cat, i}
-      <div class="category-bar">
-        <span class="category-name">{i + 1}. {cat.category}</span>
-        <span class="category-revenue">${Number(cat.totalRevenue).toLocaleString()}</span>
-        <span class="category-items">({cat.itemsSold} items)</span>
-      </div>
-    {/each}
-  {/if}
-</section>
-
-<style>
-  .live-counter {
-    text-align: center; padding: 24px;
-    background: linear-gradient(135deg, #1e293b, #334155);
-    color: white; border-radius: 12px; margin-bottom: 24px;
-  }
-  .counter-value { font-size: 3rem; font-weight: 800; display: block; }
-  .counter-label { font-size: 0.9rem; opacity: 0.8; }
-  .live-badge {
-    display: inline-block; padding: 2px 8px;
-    background: #22c55e; color: white; border-radius: 12px;
-    font-size: 0.7rem; font-weight: 700; margin-left: 8px;
-    animation: pulse 2s infinite;
-  }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-  }
-  .date-range {
-    display: flex; gap: 8px; align-items: center;
-    margin-bottom: 24px;
-  }
-  .chart { transition: opacity 0.2s; }
-  .chart.loading { opacity: 0.5; }
-  .skeleton {
-    background: linear-gradient(90deg, #f1f5f9, #e2e8f0, #f1f5f9);
-    background-size: 200% 100%;
-    animation: shimmer 1.5s infinite;
-    border-radius: 8px;
-  }
-  @keyframes shimmer {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-  }
-  .category-bar {
-    display: flex; gap: 8px; padding: 8px 0;
-    border-bottom: 1px solid #e5e7eb;
-  }
-  .category-name { flex: 1; font-weight: 600; }
-  .category-revenue { font-weight: 500; }
-  .category-items { color: #64748b; font-size: 0.85rem; }
-  .error { color: #dc2626; padding: 12px; background: #fef2f2; border-radius: 8px; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #e5e7eb; }
-  th { background: #f8fafc; font-size: 0.85rem; color: #64748b; }
-</style>
 ```
 
-## query vs Load Functions: When to Use Which
+You do not need to build deduplication yourself. The runtime handles it automatically. Calling `getProducts()` in twenty components results in one HTTP request. Trust the framework.
 
-| Feature | Load Functions | Query Functions |
-|---------|---------------|-----------------|
-| Data ownership | Page owns all data | Components own their data |
-| Coupling | Tight to route | Loose, reusable |
-| SSR | Full SSR support | SSR with async components |
-| Waterfall prevention | `Promise.all` in load | `query.batch` |
-| Real-time data | Not built-in | `query.live` |
-| Caching | SvelteKit handles | Manual + dedup |
-| Maturity | Stable, battle-tested | Experimental |
+## Organizing Remote Functions
 
-**Use load functions when:**
-- The page has a clear, well-defined set of data requirements
-- You need rock-solid SSR without experimental features
-- You want to leverage SvelteKit's built-in caching and invalidation
+As your application grows, organizing `.remote.ts` files by domain keeps the codebase navigable:
 
-**Use query functions when:**
-- Components need to declare their own data dependencies
-- You have deeply nested components that would require extensive prop drilling
-- You need real-time data with `query.live`
-- You want to share data-fetching logic across multiple pages
+```
+src/lib/api/
+  products.remote.ts      -- getProducts, searchProducts, getProductBySlug
+  categories.remote.ts    -- getCategories, getCategoryTree
+  orders.remote.ts        -- getOrders, getOrderById, getOrderStatus
+  users.remote.ts         -- getCurrentUser, getUserProfile
+  analytics.remote.ts     -- getDashboardStats, getRevenueChart
+  notifications.remote.ts -- getNotifications (live query)
+```
 
-The two approaches are not mutually exclusive. A page can use a load function for its primary data and query functions for supplementary data in nested components.
+Each file corresponds to a domain entity or feature area. This mirrors how you would organize API routes in a traditional REST backend -- but without the boilerplate of defining routes, controllers, and serializers.
+
+### WRONG: One Giant Remote File
+
+```typescript
+// WRONG -- src/lib/api/all.remote.ts
+// 500 lines with every query in the application
+export const getProducts = query(async () => { /* ... */ });
+export const getCategories = query(async () => { /* ... */ });
+export const getOrders = query(async () => { /* ... */ });
+export const getUsers = query(async () => { /* ... */ });
+// ... 30 more functions
+```
+
+This becomes unmaintainable quickly. Each function has different dependencies, different validation schemas, and different error handling. Group related functions together so a developer looking for "how products are fetched" knows to look in `products.remote.ts`.
 
 ## Try It
 
-Build a data dashboard page with the following:
+Build a product browser with remote functions:
 
-1. Create a `.remote.ts` file that exports:
-   - `getCategories()` -- no arguments, returns a list of categories
-   - `getProductsByCategory(category)` -- accepts a category string validated with Valibot, returns products
-   - `getProductStats()` -- no arguments, returns total products, average price, and out-of-stock count
-   - `getLiveInventory()` -- a live query that yields total inventory count every 5 seconds
+1. Create a `categories.remote.ts` file that exports `getCategories()` -- a query with no arguments that returns all categories from the database
 
-2. Build the page:
-   - A category sidebar that loads categories and highlights the selected one
-   - A product grid that updates when a category is selected
-   - A stats card at the top showing product statistics
-   - A live inventory counter using `query.live`
-   - Loading states using `.loading` with skeleton UIs
-   - Error states using `.error` with retry buttons
-   - A refresh button that calls `.refresh()` on the product grid
+2. Create a `products.remote.ts` file that exports `getProductsByCategory()` -- a query that accepts a `{ category: string }` argument validated with Valibot, and returns matching products
 
-3. Implement debounced search within the selected category
+3. Build a page that:
+   - Displays a list of categories from `getCategories()`
+   - When a category is selected, fetches and displays products using `getProductsByCategory({ category })`
+   - Shows skeleton loading states using `.pending`
+   - Shows error messages using `.error` with a retry button calling `.refresh()`
+   - Uses the stale-while-revalidate pattern: dims existing products while refreshing instead of replacing them with a spinner
+
+4. Add a `getProductCount()` live query that streams the total product count every 5 seconds, displayed in the page header as a live counter
+
+5. Verify that selecting the same category twice does not trigger a duplicate request (check the Network tab in DevTools)
 
 ## Key Takeaways
 
-- Remote functions decouple data fetching from routing -- any component can declare its own server data needs
-- Enable remote functions with `experimental.remoteFunctions` in kit config and `experimental.async` in compiler options
-- `.remote.ts` files run exclusively on the server; the compiler converts calls into HTTP requests. They are never bundled into the client.
-- Always validate arguments with a Zod or Valibot schema -- remote functions are public HTTP endpoints that anyone can call
-- Reactive queries re-run automatically when `$state` arguments change. Debounce user input to avoid excessive requests.
-- `.current` retains previous data during refresh, enabling stale-while-revalidate UX patterns
-- `.refresh()` re-fetches data; `.loading`, `.error`, and `.current` provide reactive UI state
-- `query.batch` combines multiple simultaneous queries into a single HTTP request, eliminating waterfall latency
-- `query.live` streams real-time data using async generators; the returned object exposes `.connected` and `.reconnect()` for connection management
-- Identical queries on the same page are deduplicated automatically -- components can freely declare their data needs
-- Add server-side caching for expensive queries to reduce database load
-- Query functions and load functions complement each other -- use load for primary page data, queries for component-level data and real-time features
+- **Remote functions decouple data fetching from routing** -- any component can declare its own server data needs without prop drilling from the page level
+- **Enable remote functions with two settings**: `experimental.remoteFunctions` in kit config and `experimental.async` in compiler options -- both are required
+- **`.remote.ts` files run exclusively on the server** -- the compiler converts client-side calls into HTTP requests, keeping your database queries and secrets out of the browser bundle
+- **Always validate arguments with a schema** (Valibot or Zod) -- remote functions are public HTTP endpoints, and unvalidated input is a security vulnerability
+- **Use `.current`, `.pending`, and `.error`** for fine-grained UI control, or `{#await}` for simpler cases -- prefer stale-while-revalidate over full loading screens on refresh
+- **`.refresh()` re-fetches data** while keeping the old data visible -- this is the production pattern for "pull to refresh" and refresh buttons
+- **`query.batch` combines multiple queries** into a single HTTP round trip -- use it when a page renders many components that each need server data
+- **`query.live` streams real-time data** using async generators and SSE -- the returned object provides `.connected` and `.reconnect()` for connection management
+- **Identical queries on the same page are deduplicated automatically** -- calling the same function with the same arguments from multiple components results in one HTTP request
+- **Organize `.remote.ts` files by domain** -- one file per entity or feature area, mirroring how you would structure API routes in a traditional backend
